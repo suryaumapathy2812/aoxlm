@@ -1,4 +1,4 @@
-# AOXLM Requirements Document
+# AoxLM Requirements Document
 
 ## What We Need and Why
 
@@ -207,8 +207,10 @@ Each line is a valid JSON object:
 {"w": "to", "s": 0.50, "e": 0.70, "c": 0.97}
 {"w": "um", "s": 0.80, "e": 1.00, "c": 0.95, "t": "filler"}
 {"w": "go", "s": 1.10, "e": 1.30, "c": 0.98}
+{"w": "more", "s": 1.50, "e": 1.70, "c": 0.91, "t": "rep"}
 {"w": "library", "s": 2.10, "e": 2.60, "c": 0.95, "spoken": "libary", "cor": true}
-{"done": true, "verbatim": "I want to um go to the libary", "text": "I want to go to the library", "lang": "en", "dur": 2.6}
+{"w": "hello", "s": 3.00, "e": 3.40, "c": 0.98, "spk": 2}
+{"done": true, "verbatim": "I want to um go more more to the libary", "text": "I want to go to the library", "lang": "en", "dur": 3.4}
 ```
 
 ### Field Definitions
@@ -220,10 +222,19 @@ Each line is a valid JSON object:
 | `s` | float | Yes | Start time in seconds |
 | `e` | float | Yes | End time in seconds |
 | `c` | float | Yes | Confidence (0.0 - 1.0) |
-| `t` | string | No | Type: "filler", "partial", "foreign" |
+| `t` | string | No | Type: `"filler"`, `"partial"`, `"rep"`, `"foreign"` |
 | `spoken` | string | No | What was actually spoken (if different from `w`) |
 | `cor` | bool | No | True if word was corrected |
 | `lang` | string | No | Language code (if different from main) |
+| `spk` | int | No | Speaker ID (for multi-speaker audio) |
+
+**Type values** (`t` field):
+| Value | Description | Example |
+|-------|-------------|---------|
+| `filler` | Filler word (um, uh, like) | "um", "uh", "you know" |
+| `partial` | Incomplete/trailed off word | "I want to..." |
+| `rep` | Repetition (stuttering) | "more more" → keep one, mark other as rep |
+| `foreign` | Foreign word in otherwise English speech | Code-switching |
 
 **Final summary fields**:
 | Field | Type | Required | Description |
@@ -233,6 +244,39 @@ Each line is a valid JSON object:
 | `text` | string | Yes | Clean transcription (what was meant) |
 | `lang` | string | Yes | Primary language code |
 | `dur` | float | Yes | Audio duration in seconds |
+
+### Examples by Correction Type
+
+**Grammar correction:**
+```jsonl
+{"w": "feeling", "s": 1.20, "e": 1.55, "c": 0.95, "spoken": "feels", "cor": true}
+```
+*Student said "It feels good" but meant "It is feeling good"*
+
+**Pronunciation correction:**
+```jsonl
+{"w": "library", "s": 2.10, "e": 2.60, "c": 0.95, "spoken": "libary", "cor": true}
+```
+*Mispronounced "library" as "libary"*
+
+**Contraction expansion:**
+```jsonl
+{"w": "want to", "s": 0.50, "e": 0.90, "c": 0.98, "spoken": "wanna", "cor": true}
+```
+*Said "wanna", meant "want to"*
+
+**Filler word:**
+```jsonl
+{"w": "um", "s": 0.80, "e": 1.00, "c": 0.94, "t": "filler"}
+```
+*Filler - included in verbatim, excluded from clean text*
+
+**Repetition:**
+```jsonl
+{"w": "more", "s": 1.50, "e": 1.70, "c": 0.91, "t": "rep"}
+{"w": "more", "s": 1.75, "e": 1.95, "c": 0.98}
+```
+*Said "more more" - first one marked as repetition*
 
 ---
 

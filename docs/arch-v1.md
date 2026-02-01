@@ -19,45 +19,45 @@ The model should deeply understand audio (like Gemini) but output structured ASR
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    AOXLM v1 ARCHITECTURE                                 │
+│                    AOXLM v1 ARCHITECTURE                                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│                         ┌─────────────────┐                              │
-│                         │   AUDIO INPUT   │                              │
-│                         │  (full file)    │                              │
-│                         └────────┬────────┘                              │
-│                                  │                                       │
-│                                  ▼                                       │
+│                                                                         │
+│                         ┌─────────────────┐                             │
+│                         │   AUDIO INPUT   │                             │
+│                         │  (full file)    │                             │
+│                         └────────┬────────┘                             │
+│                                  │                                      │
+│                                  ▼                                      │
 │                    ┌─────────────────────────┐                          │
 │                    │  SEMANTIC AUDIO ENCODER │                          │
 │                    │  (WavLM / Qwen3-Omni)   │                          │
 │                    │      ~300-500M          │                          │
 │                    └─────────────┬───────────┘                          │
-│                                  │                                       │
+│                                  │                                      │
 │                    ┌─────────────┴───────────┐                          │
-│                    │                         │                           │
-│                    ▼                         ▼                           │
+│                    │                         │                          │
+│                    ▼                         ▼                          │
 │          ┌─────────────────┐      ┌─────────────────────┐               │
 │          │    CTC HEAD     │      │  SEMANTIC DECODER   │               │
 │          │   (verbatim)    │      │  (understanding)    │               │
 │          │     ~5-10M      │      │     ~200-400M       │               │
 │          └────────┬────────┘      └──────────┬──────────┘               │
-│                   │                          │                           │
-│                   └────────────┬─────────────┘                           │
-│                                │                                         │
-│                                ▼                                         │
+│                   │                          │                          │
+│                   └────────────┬─────────────┘                          │
+│                                │                                        │
+│                                ▼                                        │
 │                    ┌─────────────────────────┐                          │
 │                    │   INTELLIGENT MERGER    │                          │
 │                    └─────────────┬───────────┘                          │
-│                                  │                                       │
-│                                  ▼                                       │
+│                                  │                                      │
+│                                  ▼                                      │
 │                    ┌─────────────────────────┐                          │
 │                    │   STREAMING OUTPUT      │                          │
 │                    │       (JSONL)           │                          │
 │                    └─────────────────────────┘                          │
-│                                                                          │
+│                                                                         │
 │  TOTAL: ~500-900M params                                                │
-│                                                                          │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -69,21 +69,40 @@ The model should deeply understand audio (like Gemini) but output structured ASR
 
 **Purpose**: Deeply understand audio content, not just map sounds to phonemes.
 
-**Options (ranked by preference)**:
+**Options (ranked by preference for our use case)**:
 
-| Encoder | Params | Type | Availability | Notes |
-|---------|--------|------|--------------|-------|
-| Qwen3-Omni AuT | ~500M | Semantic | May need extraction | Closest to Google's USM |
-| WavLM-large | 300M | Semantic | Open source | Proven, widely used |
-| Seamless-M4T encoder | ~300M | Semantic | Open source | Robust to accents/noise |
-| MMS (Meta) | 1B | Semantic | Open source | Best multilingual (1000+ langs) |
-| HuBERT-large | 300M | Semantic | Open source | Good baseline |
+| Rank | Encoder | Params | HuggingFace ID | Best For | Notes |
+|------|---------|--------|----------------|----------|-------|
+| 🥇 | **WavLM-large** | 316M | `microsoft/wavlm-large` | General semantic understanding | Best balance of quality + noise robustness. SOTA on SUPERB benchmark. |
+| 🥈 | **MMS-300M** | 317M | `facebook/mms-300m` | Code-switching, multilingual | 1000+ languages! Excellent for language learners mixing languages. |
+| 🥉 | **XLS-R-300M** | 317M | `facebook/wav2vec2-xls-r-300m` | Cross-lingual, accents | 128 languages, robust to non-native speakers. |
+| 4 | **UniSpeech-SAT** | 316M | `microsoft/unispeech-sat-large` | Speaker variation, accents | Speaker-aware training helps with different speaking styles. |
+| 5 | **HuBERT-large** | 316M | `facebook/hubert-large-ls960-ft` | Baseline semantic | Solid fallback, well-understood. |
+| 6 | **Wav2Vec2-Conformer** | 600M | `facebook/wav2vec2-conformer-rope-large-960h-ft` | High accuracy | Conformer architecture, but larger. |
+
+**Scaling options** (if we need more power):
+| Encoder | Params | HuggingFace ID | Notes |
+|---------|--------|----------------|-------|
+| XLS-R-1B | 965M | `facebook/wav2vec2-xls-r-1b` | Massive cross-lingual |
+| XLS-R-2B | 2B | `facebook/wav2vec2-xls-r-2b` | Maximum scale |
+| MMS-1B | 965M | `facebook/mms-1b` | 1000+ languages, larger |
 
 **Why Semantic over Temporal**:
 - Temporal (Whisper-style): Maps sounds → text (phonetic)
 - Semantic (WavLM-style): Understands meaning → text (contextual)
 
 For language learners, code-switching, mispronunciations → need UNDERSTANDING.
+
+**Encoder Selection Guide**:
+```
+Use case                          → Best encoder
+─────────────────────────────────────────────────
+General/English-focused           → WavLM-large
+Code-switching (mixing languages) → MMS-300M
+Non-native/accented speech        → XLS-R-300M or UniSpeech-SAT
+Maximum multilingual coverage     → MMS-1B
+Maximum accuracy (have GPU)       → XLS-R-2B
+```
 
 **Output**: Frame-level embeddings `[T × D]` where:
 - T = number of frames (typically 50Hz = 20ms per frame)
@@ -338,16 +357,77 @@ beta = 1.0   # Decoder weight
 
 ---
 
-## Implementation Order
+## Implementation Order (Incremental Approach)
 
-1. **Data pipeline**: Add alignments to VoxLM dataset
-2. **Encoder integration**: Load and test WavLM/HuBERT
-3. **CTC head**: Implement and test standalone
-4. **Decoder**: Implement with cross-attention
-5. **Joint training**: Combine losses
-6. **Merger**: Align CTC and Decoder outputs
-7. **Streaming**: Implement JSONL output
-8. **Evaluation**: Test on noisy/accented audio
+**Why incremental?** Each phase delivers value independently. If Phase 2 fails, Phase 1 still works.
+
+### Phase 1: Encoder + CTC Only (GUARANTEED TO WORK)
+
+This is proven architecture - CTC on semantic encoders is a solved problem.
+
+**Deliverable**: Verbatim transcription with accurate timestamps
+
+```
+Audio → Encoder → CTC Head → Verbatim + Timestamps
+```
+
+**Steps**:
+1. Load and test encoder options (WavLM, MMS, XLS-R)
+2. Implement CTC head (simple linear projection)
+3. Test CTC decoding and alignment extraction
+4. Basic inference pipeline
+
+**What you get**:
+- Accurate word-level timestamps (computed, not generated)
+- Verbatim transcription
+- Confidence scores
+- JSONL streaming output
+
+**This WILL work** - it's the same architecture as Wav2Vec2-CTC, just with better encoders.
+
+### Phase 2: Add Semantic Decoder (Understanding)
+
+Build on Phase 1 by adding the decoder head.
+
+**Deliverable**: Clean text + corrections
+
+```
+Audio → Encoder → CTC Head → Verbatim + Timestamps
+              └→ Decoder → Clean text
+```
+
+**Steps**:
+1. Implement cross-attention decoder
+2. Test standalone text generation
+3. Joint CTC + decoder training
+4. Merge CTC timestamps with decoder output
+
+**What you get (additional)**:
+- Clean text (fillers removed, corrections applied)
+- Mispronunciation detection
+- "spoken" vs "intended" comparison
+
+### Phase 3: Polish & Optimize
+
+**Steps**:
+1. Fine-tune encoder on target domain
+2. Optimize inference speed
+3. Add language detection
+4. Improve filler detection
+
+---
+
+## Risk Mitigation
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Encoder doesn't capture semantic info | High | WavLM/MMS proven on benchmarks - low risk |
+| CTC training fails | High | Proven architecture - very low risk |
+| Decoder doesn't learn corrections | Medium | Ship Phase 1 first, decoder is enhancement |
+| Joint training is unstable | Medium | Train CTC first, add decoder later |
+| Timestamps aren't accurate enough | Medium | CTC guarantees frame-level - <50ms error |
+
+**Key insight**: Phase 1 alone is valuable and will definitely work.
 
 ---
 
@@ -364,17 +444,19 @@ beta = 1.0   # Decoder weight
 
 ## Open Questions
 
-1. **Encoder choice**: WavLM vs Qwen3-Omni AuT - need to benchmark
+1. **Encoder choice**: WavLM vs MMS vs XLS-R - run comparison script
 2. **CTC vocab**: Characters vs subwords - affects alignment granularity
-3. **Correction aggressiveness**: How much should decoder "fix"?
-4. **Language mixing**: How to handle code-switching in output?
+3. **Correction aggressiveness**: How much should decoder "fix"? (Phase 2)
+4. **Language mixing**: How to handle code-switching in output? (MMS may help)
 
 ---
 
-## Next Steps
+## Next Steps (Current)
 
-1. Set up development environment
-2. Download and test encoder options
-3. Prepare dataset with alignments
-4. Implement minimal prototype
-5. Train and evaluate
+1. ✅ Set up development environment
+2. ✅ Document architecture and requirements
+3. 🔄 **Run encoder comparison** (`scripts/compare_encoders.py`)
+4. 🔄 **Implement Phase 1** (encoder + CTC)
+5. ⏳ Test on sample audio
+6. ⏳ Add decoder (Phase 2)
+7. ⏳ Train and evaluate

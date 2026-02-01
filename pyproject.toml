@@ -1,7 +1,7 @@
 [project]
 name = "aoxlm"
 version = "0.1.0"
-description = "Audio-Output LLM with Structured Transcription - Audio LLM + Whisper-quality timestamps"
+description = ""
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
@@ -56,6 +56,10 @@ dev = [
 train = [
     "wandb>=0.16.0",
     "datasets>=2.16.0",
+]
+datagen = [
+    "google-genai>=1.0.0",
+    "whisperx>=3.0.0",
 ]
 
 [project.urls]
