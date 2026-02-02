@@ -10,10 +10,11 @@ authors = [
 requires-python = ">=3.10"
 keywords = [
     "speech-to-text",
-    "audio-llm",
+    "cefr-assessment",
     "timestamps",
     "transcription",
-    "qwen2-audio",
+    "whisper",
+    "wavlm",
     "asr"
 ]
 classifiers = [
@@ -43,6 +44,9 @@ dependencies = [
     "numba>=0.57.0",
     "safetensors>=0.4.0",
     "huggingface-hub>=0.20.0",
+    # Transcription (Whisper + WhisperX)
+    "openai-whisper>=20231117",
+    "whisperx>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -59,7 +63,6 @@ train = [
 ]
 datagen = [
     "google-genai>=1.0.0",
-    "whisperx>=3.0.0",
 ]
 
 [project.urls]
