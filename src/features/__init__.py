@@ -6,6 +6,7 @@ Provides interpretable, research-based feature extraction for:
 - Range (vocabulary diversity, lexical sophistication)
 - Accuracy (grammar patterns, error detection)
 - Phonology (pronunciation quality, prosody)
+- Coherence (discourse markers, logical flow, cohesion)
 
 Also provides standalone calculation functions in `calculations` module
 that can be imported independently for testing or sharing.
@@ -57,6 +58,15 @@ from .wavlm_features import (
     assess_pronunciation_wavlm,
 )
 
+from .coherence import (
+    CoherenceAssessor,
+    CoherenceFeatureExtractor,
+    CoherenceScorer,
+    CoherenceFeatures,
+    CoherenceScore,
+    assess_coherence,
+)
+
 # Standalone calculations (shareable with teammates)
 from . import calculations
 
@@ -97,6 +107,13 @@ __all__ = [
     "WavLMFeatures",
     "WavLMPronunciationScore",
     "assess_pronunciation_wavlm",
+    # Coherence
+    "CoherenceAssessor",
+    "CoherenceFeatureExtractor",
+    "CoherenceScorer",
+    "CoherenceFeatures",
+    "CoherenceScore",
+    "assess_coherence",
     # Calculations module
     "calculations",
 ]

@@ -46,6 +46,7 @@ from ..features.fluency import FluencyAssessor, FluencyScore
 from ..features.range import RangeAssessor, RangeScore
 from ..features.accuracy import AccuracyAssessor, AccuracyScore
 from ..features.phonology import PhonologyAssessor, PhonologyScore
+from ..features.coherence import CoherenceAssessor, CoherenceScore
 
 
 @dataclass
@@ -53,7 +54,7 @@ class AssessmentResult:
     """
     Complete CEFR assessment result.
 
-    Combines transcription, fluency, range, accuracy, and phonology
+    Combines transcription, fluency, range, accuracy, phonology, and coherence
     assessments into a single unified result.
     """
 
@@ -67,19 +68,21 @@ class AssessmentResult:
     range: RangeScore
     accuracy: Optional[AccuracyScore] = None
     phonology: Optional[PhonologyScore] = None
+    coherence: Optional[CoherenceScore] = None
 
     # Weights used
-    fluency_weight: float = 0.35
-    range_weight: float = 0.25
-    accuracy_weight: float = 0.25
+    fluency_weight: float = 0.30
+    range_weight: float = 0.20
+    accuracy_weight: float = 0.20
     phonology_weight: float = 0.15
+    coherence_weight: float = 0.15
 
     # Source data
     transcription: Optional[TranscriptionResult] = None
     audio_path: Optional[str] = None
 
     # Metadata
-    pipeline_version: str = "2.0.0"
+    pipeline_version: str = "2.1.0"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -91,10 +94,12 @@ class AssessmentResult:
             "range_weight": self.range_weight,
             "accuracy_weight": self.accuracy_weight,
             "phonology_weight": self.phonology_weight,
+            "coherence_weight": self.coherence_weight,
             "fluency": self.fluency.to_dict(),
             "range": self.range.to_dict(),
             "accuracy": self.accuracy.to_dict() if self.accuracy else None,
             "phonology": self.phonology.to_dict() if self.phonology else None,
+            "coherence": self.coherence.to_dict() if self.coherence else None,
             "transcription": self.transcription.to_dict()
             if self.transcription
             else None,
@@ -128,6 +133,11 @@ class AssessmentResult:
                 f"  Phonology ({self.phonology_weight:.0%}): {self.phonology.level} ({self.phonology.score:.1f})"
             )
 
+        if self.coherence:
+            lines.append(
+                f"  Coherence ({self.coherence_weight:.0%}): {self.coherence.level} ({self.coherence.score:.1f})"
+            )
+
         if self.fluency.feedback:
             lines.extend(["", "Fluency Feedback:"])
             for fb in self.fluency.feedback[:3]:
@@ -146,6 +156,11 @@ class AssessmentResult:
         if self.phonology and self.phonology.feedback:
             lines.extend(["", "Phonology Feedback:"])
             for fb in self.phonology.feedback[:3]:
+                lines.append(f"  - {fb}")
+
+        if self.coherence and self.coherence.feedback:
+            lines.extend(["", "Coherence Feedback:"])
+            for fb in self.coherence.feedback[:3]:
                 lines.append(f"  - {fb}")
 
         lines.append("")
@@ -182,12 +197,14 @@ class AssessmentPipeline:
         model_size: str = "large-v3",
         device: str = "cuda",
         language: str = "en",
-        fluency_weight: float = 0.35,
-        range_weight: float = 0.25,
-        accuracy_weight: float = 0.25,
+        fluency_weight: float = 0.30,
+        range_weight: float = 0.20,
+        accuracy_weight: float = 0.20,
         phonology_weight: float = 0.15,
+        coherence_weight: float = 0.15,
         enable_accuracy: bool = True,
         enable_phonology: bool = True,
+        enable_coherence: bool = True,
         enable_wavlm: bool = False,
         wavlm_model: str = "wavlm-base",
         wavlm_device: Optional[str] = None,
@@ -201,12 +218,14 @@ class AssessmentPipeline:
             model_size: Model size for transcription
             device: Device to use (cuda, cpu)
             language: Target language
-            fluency_weight: Weight for fluency (default: 0.35)
-            range_weight: Weight for range (default: 0.25)
-            accuracy_weight: Weight for accuracy (default: 0.25)
+            fluency_weight: Weight for fluency (default: 0.30)
+            range_weight: Weight for range (default: 0.20)
+            accuracy_weight: Weight for accuracy (default: 0.20)
             phonology_weight: Weight for phonology (default: 0.15)
+            coherence_weight: Weight for coherence (default: 0.15)
             enable_accuracy: Run accuracy assessment (default: True)
             enable_phonology: Run phonology assessment (default: True)
+            enable_coherence: Run coherence assessment (default: True)
             enable_wavlm: Enable WavLM-based pronunciation analysis (default: False)
             wavlm_model: WavLM model variant (wavlm-base or wavlm-large)
             wavlm_device: Device for WavLM (default: same as transcription device)
@@ -228,6 +247,7 @@ class AssessmentPipeline:
         self.accuracy_assessor = (
             AccuracyAssessor(language=lang_code) if enable_accuracy else None
         )
+        self.coherence_assessor = CoherenceAssessor() if enable_coherence else None
 
         # Phonology assessor with optional WavLM
         if enable_phonology:
@@ -243,24 +263,28 @@ class AssessmentPipeline:
         self.range_weight = range_weight
         self.accuracy_weight = accuracy_weight if enable_accuracy else 0.0
         self.phonology_weight = phonology_weight if enable_phonology else 0.0
+        self.coherence_weight = coherence_weight if enable_coherence else 0.0
 
         # Normalize weights if not all assessments enabled
-        if not enable_accuracy or not enable_phonology:
+        if not enable_accuracy or not enable_phonology or not enable_coherence:
             total = (
                 self.fluency_weight
                 + self.range_weight
                 + self.accuracy_weight
                 + self.phonology_weight
+                + self.coherence_weight
             )
             if total > 0:
                 self.fluency_weight /= total
                 self.range_weight /= total
                 self.accuracy_weight /= total
                 self.phonology_weight /= total
+                self.coherence_weight /= total
 
         self.language = language
         self.enable_accuracy = enable_accuracy
         self.enable_phonology = enable_phonology
+        self.enable_coherence = enable_coherence
         self.enable_wavlm = enable_wavlm
 
     def assess(
@@ -312,7 +336,12 @@ class AssessmentPipeline:
                 audio_path=audio_path,
             )
 
-        # 6. Calculate combined score
+        # 6. Assess coherence from transcription text
+        coherence_score = None
+        if self.coherence_assessor:
+            coherence_score = self.coherence_assessor.assess(transcription_result.text)
+
+        # 7. Calculate combined score
         combined_score = (
             fluency_score.score * self.fluency_weight
             + range_score.score * self.range_weight
@@ -321,11 +350,13 @@ class AssessmentPipeline:
             combined_score += accuracy_score.score * self.accuracy_weight
         if phonology_score:
             combined_score += phonology_score.score * self.phonology_weight
+        if coherence_score:
+            combined_score += coherence_score.score * self.coherence_weight
 
-        # 7. Map to CEFR level
+        # 8. Map to CEFR level
         level = self._score_to_level(combined_score)
 
-        # 8. Calculate combined confidence
+        # 9. Calculate combined confidence
         combined_confidence = (
             fluency_score.confidence * self.fluency_weight
             + range_score.confidence * self.range_weight
@@ -334,6 +365,8 @@ class AssessmentPipeline:
             combined_confidence += accuracy_score.confidence * self.accuracy_weight
         if phonology_score:
             combined_confidence += phonology_score.confidence * self.phonology_weight
+        if coherence_score:
+            combined_confidence += coherence_score.confidence * self.coherence_weight
 
         return AssessmentResult(
             level=level,
@@ -343,10 +376,12 @@ class AssessmentPipeline:
             range=range_score,
             accuracy=accuracy_score,
             phonology=phonology_score,
+            coherence=coherence_score,
             fluency_weight=self.fluency_weight,
             range_weight=self.range_weight,
             accuracy_weight=self.accuracy_weight,
             phonology_weight=self.phonology_weight,
+            coherence_weight=self.coherence_weight,
             transcription=transcription_result,
             audio_path=audio_path,
         )
@@ -402,6 +437,11 @@ class AssessmentPipeline:
                 audio_path=audio_path,
             )
 
+        # Assess coherence (always available with text)
+        coherence_score = None
+        if self.coherence_assessor:
+            coherence_score = self.coherence_assessor.assess(text)
+
         # Calculate combined score
         active_weight = 0.0
         combined_score = 0.0
@@ -426,6 +466,11 @@ class AssessmentPipeline:
             combined_confidence += phonology_score.confidence * self.phonology_weight
             active_weight += self.phonology_weight
 
+        if coherence_score:
+            combined_score += coherence_score.score * self.coherence_weight
+            combined_confidence += coherence_score.confidence * self.coherence_weight
+            active_weight += self.coherence_weight
+
         # Normalize by active weight
         if active_weight > 0:
             combined_score /= active_weight
@@ -441,10 +486,12 @@ class AssessmentPipeline:
             range=range_score,
             accuracy=accuracy_score,
             phonology=phonology_score,
+            coherence=coherence_score,
             fluency_weight=self.fluency_weight if fluency_score.score > 0 else 0.0,
             range_weight=self.range_weight,
             accuracy_weight=self.accuracy_weight if accuracy_score else 0.0,
             phonology_weight=self.phonology_weight if phonology_score else 0.0,
+            coherence_weight=self.coherence_weight if coherence_score else 0.0,
         )
 
     def _score_to_level(self, score: float) -> str:

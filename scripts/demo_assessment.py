@@ -89,6 +89,11 @@ def main():
         help="Disable phonology (pronunciation) assessment",
     )
     parser.add_argument(
+        "--no-coherence",
+        action="store_true",
+        help="Disable coherence (discourse markers, linking) assessment",
+    )
+    parser.add_argument(
         "--enable-wavlm",
         action="store_true",
         help="Enable WavLM-based pronunciation analysis (adds smoothness metric)",
@@ -144,6 +149,7 @@ def main():
         range_weight=args.range_weight,
         enable_accuracy=not args.no_accuracy,
         enable_phonology=not args.no_phonology,
+        enable_coherence=not args.no_coherence,
         enable_wavlm=args.enable_wavlm,
         wavlm_model=args.wavlm_model,
     )
