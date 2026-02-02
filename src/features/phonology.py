@@ -54,19 +54,29 @@ class PhonologyFeatures:
     low_confidence_ratio: float = 0.0  # % of words with confidence < 0.7
     low_confidence_words: List[str] = field(default_factory=list)
 
-    # Pitch-based (from audio)
+    # Pitch-based (from audio) - INTONATION
     pitch_mean: float = 0.0  # Average pitch (Hz)
     pitch_std: float = 0.0  # Pitch variation
     pitch_range: float = 0.0  # Max - min pitch
-    pitch_variation_ratio: float = 0.0  # Relative variation
+    pitch_cv: float = 0.0  # Coefficient of variation (key for intonation)
+    intonation_pattern: str = "unknown"  # monotone/limited/natural/erratic
 
-    # Energy-based
+    # Energy-based - STRESS
     energy_mean: float = 0.0  # Average energy
     energy_std: float = 0.0  # Energy variation
-    energy_variation_ratio: float = 0.0  # Relative variation
+    energy_cv: float = 0.0  # Coefficient of variation (key for stress)
+    stress_pattern: str = "unknown"  # weak/moderate/good
 
-    # Rhythm-based
+    # Rhythm-based - nPVI
+    npvi_duration: float = 0.0  # nPVI for word durations
+    npvi_ioi: float = 0.0  # nPVI for inter-onset intervals
+    rhythm_pattern: str = "unknown"  # choppy/developing/natural
     speech_rate_consistency: float = 0.0  # How consistent is the pace
+    mean_word_duration: float = 0.0  # Average word duration
+
+    # Legacy (kept for compatibility)
+    pitch_variation_ratio: float = 0.0  # Same as pitch_cv
+    energy_variation_ratio: float = 0.0  # Same as energy_cv
     syllable_timing_regularity: float = 0.0  # Rhythm regularity
 
     # Meta
@@ -161,6 +171,9 @@ class PhonologyFeatureExtractor:
         # Extract confidence-based features
         confidence_features = self._extract_confidence_features(words)
 
+        # Extract rhythm features (nPVI) from word timestamps
+        rhythm_features = self._extract_rhythm_features(words)
+
         # Extract audio features if available
         audio_features = {}
         audio_analyzed = False
@@ -181,6 +194,14 @@ class PhonologyFeatureExtractor:
         if words:
             duration = words[-1].get("end", 0) - words[0].get("start", 0)
 
+        # Get pitch CV and intonation pattern
+        pitch_cv = audio_features.get("pitch_cv", 0.0)
+        intonation_pattern = self._classify_intonation(pitch_cv)
+
+        # Get energy CV and stress pattern
+        energy_cv = audio_features.get("energy_cv", 0.0)
+        stress_pattern = self._classify_stress(energy_cv)
+
         return PhonologyFeatures(
             # Confidence features
             mean_confidence=confidence_features.get("mean", 0.0),
@@ -188,16 +209,26 @@ class PhonologyFeatureExtractor:
             confidence_std=confidence_features.get("std", 0.0),
             low_confidence_ratio=confidence_features.get("low_ratio", 0.0),
             low_confidence_words=confidence_features.get("low_words", []),
-            # Audio features
+            # Pitch/Intonation
             pitch_mean=audio_features.get("pitch_mean", 0.0),
             pitch_std=audio_features.get("pitch_std", 0.0),
             pitch_range=audio_features.get("pitch_range", 0.0),
-            pitch_variation_ratio=audio_features.get("pitch_variation_ratio", 0.0),
+            pitch_cv=pitch_cv,
+            intonation_pattern=intonation_pattern,
+            # Energy/Stress
             energy_mean=audio_features.get("energy_mean", 0.0),
             energy_std=audio_features.get("energy_std", 0.0),
-            energy_variation_ratio=audio_features.get("energy_variation_ratio", 0.0),
-            # Rhythm
+            energy_cv=energy_cv,
+            stress_pattern=stress_pattern,
+            # Rhythm (nPVI)
+            npvi_duration=rhythm_features.get("npvi_duration", 0.0),
+            npvi_ioi=rhythm_features.get("npvi_ioi", 0.0),
+            rhythm_pattern=rhythm_features.get("rhythm_pattern", "unknown"),
             speech_rate_consistency=confidence_features.get("rate_consistency", 0.0),
+            mean_word_duration=rhythm_features.get("mean_word_duration", 0.0),
+            # Legacy compatibility
+            pitch_variation_ratio=pitch_cv,
+            energy_variation_ratio=energy_cv,
             syllable_timing_regularity=confidence_features.get(
                 "timing_regularity", 0.0
             ),
@@ -206,6 +237,30 @@ class PhonologyFeatureExtractor:
             duration=duration,
             audio_analyzed=audio_analyzed,
         )
+
+    def _classify_intonation(self, pitch_cv: float) -> str:
+        """Classify intonation pattern based on pitch coefficient of variation."""
+        if pitch_cv == 0:
+            return "unknown"
+        elif pitch_cv < 0.10:
+            return "monotone"  # Flat, needs work
+        elif pitch_cv < 0.15:
+            return "limited"  # Some variation, developing
+        elif pitch_cv <= 0.35:
+            return "natural"  # Good, expressive
+        else:
+            return "erratic"  # Too much variation
+
+    def _classify_stress(self, energy_cv: float) -> str:
+        """Classify stress pattern based on energy coefficient of variation."""
+        if energy_cv == 0:
+            return "unknown"
+        elif energy_cv < 0.25:
+            return "weak"  # Little differentiation between stressed/unstressed
+        elif energy_cv <= 0.50:
+            return "moderate"  # Some stress differentiation
+        else:
+            return "good"  # Clear stress patterns
 
     def _extract_confidence_features(self, words: List[Dict]) -> Dict:
         """Extract features from word confidence scores."""
@@ -246,6 +301,111 @@ class PhonologyFeatureExtractor:
             "rate_consistency": rate_consistency,
             "timing_regularity": timing_regularity,
         }
+
+    def _extract_rhythm_features(self, words: List[Dict]) -> Dict:
+        """
+        Extract rhythm features including nPVI (normalized Pairwise Variability Index).
+
+        nPVI measures the variability in duration between successive elements.
+        - Higher nPVI = more stress-timed (like native English, ~55-65)
+        - Lower nPVI = more syllable-timed (like Spanish, or L2 English learners ~35-45)
+
+        References:
+        - Grabe & Low (2002): "Durational Variability in Speech"
+        """
+        if len(words) < 3:
+            return {
+                "npvi_duration": 0.0,
+                "npvi_ioi": 0.0,
+                "mean_word_duration": 0.0,
+                "rhythm_pattern": "unknown",
+            }
+
+        # Calculate word durations
+        durations = []
+        for w in words:
+            start = w.get("start", 0)
+            end = w.get("end", 0)
+            if end > start:
+                durations.append(end - start)
+
+        # Calculate inter-onset intervals (IOI)
+        ioi = []
+        for i in range(1, len(words)):
+            prev_start = words[i - 1].get("start", 0)
+            curr_start = words[i].get("start", 0)
+            interval = curr_start - prev_start
+            if interval > 0:
+                ioi.append(interval)
+
+        # Calculate nPVI for durations
+        npvi_duration = self._calculate_npvi(durations)
+
+        # Calculate nPVI for IOI
+        npvi_ioi = self._calculate_npvi(ioi)
+
+        # Mean word duration
+        mean_duration = np.mean(durations) if durations else 0.0
+
+        # Classify rhythm pattern based on nPVI
+        # Native English speakers: nPVI ~55-65
+        # L2 learners often have lower values (~35-50)
+        rhythm_pattern = self._classify_rhythm(npvi_duration)
+
+        return {
+            "npvi_duration": float(npvi_duration),
+            "npvi_ioi": float(npvi_ioi),
+            "mean_word_duration": float(mean_duration),
+            "rhythm_pattern": rhythm_pattern,
+        }
+
+    def _calculate_npvi(self, durations: List[float]) -> float:
+        """
+        Calculate normalized Pairwise Variability Index (nPVI).
+
+        Formula: nPVI = 100 * (1/(n-1)) * sum(|d_k - d_{k+1}| / ((d_k + d_{k+1})/2))
+
+        Args:
+            durations: List of durations (word lengths or intervals)
+
+        Returns:
+            nPVI value (typically 30-70 for speech)
+        """
+        if len(durations) < 2:
+            return 0.0
+
+        n = len(durations)
+        total = 0.0
+
+        for k in range(n - 1):
+            d_k = durations[k]
+            d_k1 = durations[k + 1]
+            avg = (d_k + d_k1) / 2
+
+            if avg > 0:
+                total += abs(d_k - d_k1) / avg
+
+        return 100 * total / (n - 1)
+
+    def _classify_rhythm(self, npvi: float) -> str:
+        """
+        Classify rhythm pattern based on nPVI.
+
+        CEFR Benchmarks:
+        - A1-A2: nPVI < 45 (choppy, syllable-timed)
+        - B1: nPVI 45-52 (developing stress-timing)
+        - B2+: nPVI 52-65 (natural English rhythm)
+        """
+        if npvi == 0:
+            return "unknown"
+        elif npvi < 40:
+            return "choppy"  # Very syllable-timed, staccato
+        elif npvi < 50:
+            return "developing"  # Moving toward stress-timing
+        elif npvi <= 65:
+            return "natural"  # Good English rhythm
+        else:
+            return "variable"  # Highly variable (could be expressive or inconsistent)
 
     def _calculate_rate_consistency(self, words: List[Dict]) -> float:
         """Calculate speech rate consistency across the recording."""
@@ -317,7 +477,20 @@ class PhonologyFeatureExtractor:
         audio_path: Optional[str] = None,
         audio_array: Optional[np.ndarray] = None,
     ) -> Dict:
-        """Extract pitch and energy features from audio."""
+        """
+        Extract pitch and energy features from audio.
+
+        Pitch CV (coefficient of variation) is key for intonation:
+        - CV < 0.10: monotone
+        - CV 0.10-0.15: limited variation
+        - CV 0.15-0.35: natural intonation
+        - CV > 0.35: erratic
+
+        Energy CV is key for stress patterns:
+        - CV < 0.25: weak stress differentiation
+        - CV 0.25-0.50: moderate
+        - CV > 0.50: good stress patterns
+        """
         import librosa
 
         # Load audio
@@ -331,13 +504,13 @@ class PhonologyFeatureExtractor:
 
         features = {}
 
-        # Pitch (F0) extraction
+        # Pitch (F0) extraction for INTONATION analysis
         try:
             # Use pyin for pitch tracking (handles speech well)
             f0, voiced_flag, voiced_probs = librosa.pyin(
                 y,
-                fmin=librosa.note_to_hz("C2"),  # ~65 Hz
-                fmax=librosa.note_to_hz("C6"),  # ~1047 Hz
+                fmin=float(librosa.note_to_hz("C2")),  # ~65 Hz
+                fmax=float(librosa.note_to_hz("C6")),  # ~1047 Hz
                 sr=sr,
             )
 
@@ -345,35 +518,38 @@ class PhonologyFeatureExtractor:
             f0_voiced = f0[voiced_flag]
 
             if len(f0_voiced) > 0:
-                features["pitch_mean"] = float(np.nanmean(f0_voiced))
-                features["pitch_std"] = float(np.nanstd(f0_voiced))
+                pitch_mean = float(np.nanmean(f0_voiced))
+                pitch_std = float(np.nanstd(f0_voiced))
+
+                features["pitch_mean"] = pitch_mean
+                features["pitch_std"] = pitch_std
                 features["pitch_range"] = float(
                     np.nanmax(f0_voiced) - np.nanmin(f0_voiced)
                 )
 
-                # Pitch variation ratio (normalized by mean)
-                if features["pitch_mean"] > 0:
-                    features["pitch_variation_ratio"] = (
-                        features["pitch_std"] / features["pitch_mean"]
-                    )
+                # Pitch CV (coefficient of variation) - KEY METRIC FOR INTONATION
+                if pitch_mean > 0:
+                    features["pitch_cv"] = pitch_std / pitch_mean
                 else:
-                    features["pitch_variation_ratio"] = 0.0
+                    features["pitch_cv"] = 0.0
         except Exception:
             pass
 
-        # Energy (RMS) extraction
+        # Energy (RMS) extraction for STRESS analysis
         try:
             rms = librosa.feature.rms(y=y)[0]
 
-            features["energy_mean"] = float(np.mean(rms))
-            features["energy_std"] = float(np.std(rms))
+            energy_mean = float(np.mean(rms))
+            energy_std = float(np.std(rms))
 
-            if features["energy_mean"] > 0:
-                features["energy_variation_ratio"] = (
-                    features["energy_std"] / features["energy_mean"]
-                )
+            features["energy_mean"] = energy_mean
+            features["energy_std"] = energy_std
+
+            # Energy CV - KEY METRIC FOR STRESS PATTERNS
+            if energy_mean > 0:
+                features["energy_cv"] = energy_std / energy_mean
             else:
-                features["energy_variation_ratio"] = 0.0
+                features["energy_cv"] = 0.0
         except Exception:
             pass
 
@@ -389,23 +565,25 @@ class PhonologyScorer:
     """
     Score phonology features to produce CEFR level.
 
-    Primary signal: Whisper confidence scores
-    Secondary: Pitch/energy variation (natural speech patterns)
+    Uses multiple signals:
+    1. Whisper confidence (pronunciation clarity)
+    2. Pitch CV / Intonation (monotone vs expressive)
+    3. Energy CV / Stress patterns
+    4. nPVI / Rhythm (stress-timing)
 
-    CEFR Benchmarks (confidence scores):
-    - A1: < 0.65 mean confidence
-    - A2: 0.65-0.75 mean confidence
-    - B1: 0.75-0.85 mean confidence
-    - B2+: > 0.85 mean confidence
+    CEFR Benchmarks:
+    - A1-A2: monotone, choppy rhythm, weak stress
+    - B1: developing intonation and rhythm
+    - B2+: natural intonation, good rhythm, clear stress
     """
 
     def __init__(self):
         """Initialize scorer with default weights."""
         self.weights = {
-            "confidence": 0.50,  # Whisper confidence (primary)
-            "consistency": 0.20,  # Pronunciation consistency
-            "prosody": 0.20,  # Pitch/energy variation
-            "rhythm": 0.10,  # Speech rhythm
+            "confidence": 0.30,  # Whisper confidence (pronunciation clarity)
+            "intonation": 0.25,  # Pitch variation (monotone vs expressive)
+            "rhythm": 0.25,  # nPVI (stress-timing)
+            "stress": 0.20,  # Energy variation (stress patterns)
         }
 
     def score(self, features: PhonologyFeatures) -> PhonologyScore:
@@ -431,9 +609,9 @@ class PhonologyScorer:
         # Calculate sub-scores
         sub_scores = {
             "confidence": self._score_confidence(features),
-            "consistency": self._score_consistency(features),
-            "prosody": self._score_prosody(features),
-            "rhythm": self._score_rhythm(features),
+            "intonation": self._score_intonation(features),
+            "rhythm": self._score_rhythm_npvi(features),
+            "stress": self._score_stress(features),
         }
 
         # Weighted average
@@ -478,70 +656,106 @@ class PhonologyScorer:
         else:
             return max(0, mean_conf * 60)  # 0-30
 
-    def _score_consistency(self, features: PhonologyFeatures) -> float:
-        """Score pronunciation consistency (low std = consistent)."""
-        # Lower std relative to mean = more consistent
-        if features.mean_confidence == 0:
-            return 50.0
-
-        cv = features.confidence_std / features.mean_confidence
-
-        # Also penalize high ratio of low-confidence words
-        low_ratio_penalty = features.low_confidence_ratio * 30
-
-        if cv < 0.1:
-            base = 90
-        elif cv < 0.2:
-            base = 75
-        elif cv < 0.3:
-            base = 60
-        else:
-            base = 45
-
-        return max(0, base - low_ratio_penalty)
-
-    def _score_prosody(self, features: PhonologyFeatures) -> float:
+    def _score_intonation(self, features: PhonologyFeatures) -> float:
         """
-        Score prosody (pitch/energy variation).
+        Score intonation based on pitch coefficient of variation.
 
-        Natural speech has moderate variation.
-        Too little = monotone, too much = erratic.
+        CEFR Benchmarks:
+        - A1-A2: CV < 0.12 (monotone, score 30-50)
+        - B1: CV 0.12-0.20 (developing, score 55-70)
+        - B2+: CV 0.15-0.35 (natural, score 75-95)
         """
         if not features.audio_analyzed:
             return 60.0  # Neutral if no audio analysis
 
-        pitch_var = features.pitch_variation_ratio
-        energy_var = features.energy_variation_ratio
+        cv = features.pitch_cv
+        pattern = features.intonation_pattern
 
-        # Ideal pitch variation: 0.15-0.35 (relative)
-        if 0.15 <= pitch_var <= 0.35:
-            pitch_score = 85
-        elif 0.10 <= pitch_var <= 0.40:
-            pitch_score = 70
-        elif pitch_var < 0.10:  # Monotone
-            pitch_score = 50
-        else:  # Too variable
-            pitch_score = 55
-
-        # Ideal energy variation: 0.3-0.6
-        if 0.3 <= energy_var <= 0.6:
-            energy_score = 80
-        elif 0.2 <= energy_var <= 0.7:
-            energy_score = 65
+        if pattern == "natural":
+            return 85  # Good expressive intonation
+        elif pattern == "limited":
+            return 65  # Developing, some variation
+        elif pattern == "monotone":
+            return 40  # Flat, needs work
+        elif pattern == "erratic":
+            return 55  # Too variable, needs smoothing
         else:
-            energy_score = 50
+            # Fallback to CV-based scoring
+            if cv >= 0.15 and cv <= 0.35:
+                return 85
+            elif cv >= 0.10:
+                return 65
+            elif cv < 0.10:
+                return 40
+            else:
+                return 55
 
-        return (pitch_score + energy_score) / 2
+    def _score_rhythm_npvi(self, features: PhonologyFeatures) -> float:
+        """
+        Score rhythm based on nPVI (normalized Pairwise Variability Index).
 
-    def _score_rhythm(self, features: PhonologyFeatures) -> float:
-        """Score speech rhythm regularity."""
-        consistency = features.speech_rate_consistency
-        regularity = features.syllable_timing_regularity
+        Native English: nPVI ~55-65 (stress-timed)
+        L2 learners: often ~35-50 (syllable-timed)
 
-        # Higher consistency and regularity = better rhythm
-        rhythm_score = (consistency + regularity) / 2 * 100
+        CEFR Benchmarks:
+        - A1-A2: nPVI < 45 (choppy, score 30-50)
+        - B1: nPVI 45-52 (developing, score 55-70)
+        - B2+: nPVI 52-65 (natural, score 75-90)
+        """
+        npvi = features.npvi_duration
+        pattern = features.rhythm_pattern
 
-        return min(100, max(0, rhythm_score))
+        if pattern == "natural":
+            return 85  # Good English rhythm
+        elif pattern == "developing":
+            return 65  # Moving toward stress-timing
+        elif pattern == "choppy":
+            return 40  # Syllable-timed, staccato
+        elif pattern == "variable":
+            return 70  # High variability (could be expressive)
+        else:
+            # Fallback to nPVI-based scoring
+            if npvi >= 52 and npvi <= 65:
+                return 85
+            elif npvi >= 45:
+                return 65
+            elif npvi >= 35:
+                return 50
+            else:
+                return 35
+
+    def _score_stress(self, features: PhonologyFeatures) -> float:
+        """
+        Score stress patterns based on energy coefficient of variation.
+
+        Good stress patterns show clear differentiation between
+        stressed and unstressed syllables/words.
+
+        CEFR Benchmarks:
+        - A1-A2: CV < 0.25 (weak, score 35-50)
+        - B1: CV 0.25-0.40 (moderate, score 55-70)
+        - B2+: CV > 0.40 (good, score 75-90)
+        """
+        if not features.audio_analyzed:
+            return 60.0  # Neutral if no audio analysis
+
+        pattern = features.stress_pattern
+
+        if pattern == "good":
+            return 85  # Clear stress differentiation
+        elif pattern == "moderate":
+            return 65  # Some stress patterns
+        elif pattern == "weak":
+            return 45  # Little differentiation
+        else:
+            # Fallback to CV-based scoring
+            cv = features.energy_cv
+            if cv >= 0.40:
+                return 85
+            elif cv >= 0.25:
+                return 65
+            else:
+                return 45
 
     def _calculate_confidence(self, features: PhonologyFeatures) -> float:
         """Calculate confidence in the assessment."""
@@ -569,50 +783,82 @@ class PhonologyScorer:
         sub_scores: Dict[str, float],
         level: str,
     ) -> List[str]:
-        """Generate actionable feedback."""
+        """Generate actionable feedback based on new metrics."""
         feedback = []
 
-        # Confidence-based feedback
-        if features.mean_confidence < 0.65:
-            feedback.append(
-                "Pronunciation clarity needs improvement. "
-                "Practice speaking slowly and clearly."
-            )
-        elif features.mean_confidence < 0.75:
-            feedback.append(
-                "Some pronunciation issues detected. "
-                "Focus on problematic sounds and words."
-            )
-
-        # Low confidence words feedback
-        if features.low_confidence_words:
-            words = ", ".join(features.low_confidence_words[:5])
-            feedback.append(f"Words needing pronunciation practice: {words}")
-
-        # Consistency feedback
-        if features.low_confidence_ratio > 0.2:
-            feedback.append(
-                f"{features.low_confidence_ratio:.0%} of words have unclear pronunciation. "
-                "Work on consistent articulation."
-            )
-
-        # Prosody feedback
+        # INTONATION feedback (pitch CV)
         if features.audio_analyzed:
-            if features.pitch_variation_ratio < 0.10:
+            if features.intonation_pattern == "monotone":
                 feedback.append(
-                    "Speech sounds monotone. Try varying your pitch for natural intonation."
+                    "Speech sounds monotone (flat pitch). "
+                    "Practice varying your pitch - go up at questions, down at statements."
                 )
-            elif features.pitch_variation_ratio > 0.40:
+            elif features.intonation_pattern == "limited":
                 feedback.append(
-                    "Pitch variation is high. Aim for smoother intonation patterns."
+                    "Intonation is developing. Try to be more expressive with pitch variation."
                 )
+            elif features.intonation_pattern == "erratic":
+                feedback.append(
+                    "Pitch variation is uneven. Aim for smoother, more controlled intonation."
+                )
+            elif features.intonation_pattern == "natural":
+                feedback.append("Good intonation - natural pitch variation.")
 
-        # Positive feedback
-        if features.mean_confidence >= 0.85:
+        # RHYTHM feedback (nPVI)
+        if features.rhythm_pattern == "choppy":
+            feedback.append(
+                "Speech rhythm is choppy/staccato. "
+                "Practice 'chunking' - grouping words together instead of saying them one by one."
+            )
+        elif features.rhythm_pattern == "developing":
+            feedback.append(
+                "Rhythm is developing. Work on connecting words more smoothly."
+            )
+        elif features.rhythm_pattern == "natural":
+            feedback.append("Good speech rhythm - natural English stress-timing.")
+
+        # STRESS feedback (energy CV)
+        if features.audio_analyzed:
+            if features.stress_pattern == "weak":
+                feedback.append(
+                    "Word stress is weak. Practice emphasizing important words "
+                    "(nouns, verbs) more than function words (the, a, is)."
+                )
+            elif features.stress_pattern == "good":
+                feedback.append("Good stress patterns - clear emphasis on key words.")
+
+        # PRONUNCIATION CLARITY (confidence)
+        if features.mean_confidence < 0.70:
+            feedback.append(
+                "Pronunciation clarity needs work. Practice speaking slowly and clearly."
+            )
+        elif features.mean_confidence >= 0.85:
             feedback.append("Good pronunciation clarity - words are well articulated.")
 
-        if sub_scores.get("rhythm", 0) >= 70:
-            feedback.append("Good speech rhythm - natural pacing.")
+        # Low confidence words (filter out common words and punctuation)
+        if features.low_confidence_words:
+            # Filter out very common words and punctuation artifacts
+            common_words = {
+                "i",
+                "a",
+                "the",
+                "to",
+                "is",
+                "it",
+                "and",
+                "of",
+                "in",
+                "that",
+            }
+            filtered_words = [
+                w.strip(".,!?")
+                for w in features.low_confidence_words
+                if w.strip(".,!?").lower() not in common_words
+                and len(w.strip(".,!?")) > 1
+            ]
+            if filtered_words:
+                words = ", ".join(filtered_words[:5])
+                feedback.append(f"Words to practice: {words}")
 
         return feedback
 
