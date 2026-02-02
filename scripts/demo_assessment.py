@@ -4,14 +4,16 @@ Demo: CEFR Speech Assessment Pipeline
 
 This script demonstrates the complete assessment pipeline:
 1. Load audio file
-2. Transcribe with Whisper (word timestamps)
+2. Transcribe with faster-whisper (word timestamps)
 3. Assess fluency using feature-based scoring
 4. Assess range (vocabulary diversity)
 5. Output combined CEFR assessment
 
 Usage:
     uv run python scripts/demo_assessment.py data/1769858336827.mp3
+    uv run python scripts/demo_assessment.py data/1769858336827.mp3 --device cuda
     uv run python scripts/demo_assessment.py --url "https://s3.amazonaws.com/..."
+    uv run python scripts/demo_assessment.py data/audio.mp3 --model medium --device cuda
 """
 
 import argparse
@@ -19,7 +21,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 import urllib.request
 
 # Add src to path
@@ -38,37 +40,89 @@ def download_audio(url: str, output_path: Optional[str] = None) -> str:
     return output_path
 
 
-def load_audio(path: str, max_duration: float = 60.0):
-    """Load audio file using librosa."""
-    import librosa
+def transcribe_faster_whisper(
+    audio_path: str,
+    model_size: str = "large-v3",
+    device: str = "cuda",
+    compute_type: str = "float16",
+    language: str = "en",
+    initial_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Transcribe audio using faster-whisper with word timestamps.
 
-    print(f"Loading audio: {path}")
-    audio, sr = librosa.load(path, sr=16000, mono=True, duration=max_duration)
-    duration = len(audio) / sr
-    print(f"  Duration: {duration:.1f}s, Sample rate: {sr}Hz")
-    return audio, sr, duration
+    Args:
+        audio_path: Path to audio file
+        model_size: Model size (tiny, base, small, medium, large-v2, large-v3)
+        device: Device to use (cuda, cpu)
+        compute_type: Compute type (float16, int8, int8_float16)
+        language: Language code
+        initial_prompt: Optional prompt to guide transcription
 
+    Returns:
+        Dict with 'text' and 'segments' (Whisper-compatible format)
+    """
+    from faster_whisper import WhisperModel
 
-def transcribe_whisper(audio, device: str = "cpu") -> Dict:
-    """Transcribe audio using Whisper with word timestamps."""
-    import whisper
+    # Adjust compute type for CPU
+    if device == "cpu":
+        compute_type = "int8"
 
-    print(f"Loading Whisper model (device: {device})...")
-    model = whisper.load_model("base", device=device)
+    print(
+        f"Loading faster-whisper model: {model_size} (device: {device}, compute: {compute_type})..."
+    )
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     print("Transcribing...")
-    result = model.transcribe(
-        audio,
+    segments, info = model.transcribe(
+        audio_path,
+        language=language,
         word_timestamps=True,
-        language="en",
-        verbose=False,
+        initial_prompt=initial_prompt,
+        vad_filter=True,  # Filter out silence
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
 
-    # Count words
-    word_count = sum(len(seg.get("words", [])) for seg in result.get("segments", []))
-    print(f"  Transcribed {word_count} words")
+    # Convert to Whisper-compatible format
+    result_segments = []
+    full_text = []
+    total_words = 0
 
-    return result
+    for segment in segments:
+        seg_words = []
+        if segment.words:
+            for word in segment.words:
+                seg_words.append(
+                    {
+                        "word": word.word,
+                        "start": word.start,
+                        "end": word.end,
+                        "probability": word.probability,
+                    }
+                )
+                total_words += 1
+
+        result_segments.append(
+            {
+                "id": segment.id,
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "words": seg_words,
+            }
+        )
+        full_text.append(segment.text)
+
+    print(f"  Language: {info.language} (prob: {info.language_probability:.2f})")
+    print(f"  Duration: {info.duration:.1f}s")
+    print(f"  Transcribed {total_words} words in {len(result_segments)} segments")
+
+    return {
+        "text": "".join(full_text),
+        "segments": result_segments,
+        "language": info.language,
+        "duration": info.duration,
+    }
 
 
 def assess_fluency_score(whisper_result: Dict, duration: float):
@@ -173,15 +227,26 @@ def main():
     )
     parser.add_argument(
         "--device",
-        default="cpu",
+        default="cuda",
         choices=["cpu", "cuda"],
-        help="Device for Whisper (default: cpu)",
+        help="Device for Whisper (default: cuda)",
     )
     parser.add_argument(
-        "--max-duration",
-        type=float,
-        default=60.0,
-        help="Maximum audio duration in seconds (default: 60)",
+        "--model",
+        default="large-v3",
+        choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+        help="Whisper model size (default: large-v3)",
+    )
+    parser.add_argument(
+        "--compute-type",
+        default="float16",
+        choices=["float16", "int8", "int8_float16"],
+        help="Compute type for faster-whisper (default: float16)",
+    )
+    parser.add_argument(
+        "--prompt",
+        default="Indian English speaker discussing hobbies, interests, travel, making Ganesha idols, cooking, sports.",
+        help="Initial prompt to guide transcription (helps with domain-specific words)",
     )
     parser.add_argument(
         "--output-json",
@@ -215,31 +280,38 @@ def main():
     print("CEFR SPEECH ASSESSMENT DEMO")
     print("=" * 60)
     print(f"Audio: {audio_path}")
+    print(f"Model: faster-whisper {args.model}")
     print(f"Device: {args.device}")
     print()
 
-    # 1. Load audio
-    audio, sr, duration = load_audio(audio_path, max_duration=args.max_duration)
+    # 1. Transcribe with faster-whisper
+    whisper_result = transcribe_faster_whisper(
+        audio_path,
+        model_size=args.model,
+        device=args.device,
+        compute_type=args.compute_type,
+        initial_prompt=args.prompt,
+    )
 
-    # 2. Transcribe
-    whisper_result = transcribe_whisper(audio, device=args.device)
+    duration = whisper_result.get("duration", 60.0)
 
     print("\n" + "-" * 60)
     print("TRANSCRIPTION:")
     print("-" * 60)
-    print(whisper_result.get("text", "")[:500])
-    if len(whisper_result.get("text", "")) > 500:
+    text = whisper_result.get("text", "")
+    print(text[:500])
+    if len(text) > 500:
         print("...")
 
-    # 3. Assess fluency
+    # 2. Assess fluency
     fluency_result = assess_fluency_score(whisper_result, duration)
 
-    # 4. Assess range (if not fluency-only)
+    # 3. Assess range (if not fluency-only)
     if not args.fluency_only:
         try:
             range_result = assess_range_score(whisper_result)
 
-            # 5. Combine assessments
+            # 4. Combine assessments
             combined = combine_assessments(fluency_result, range_result)
         except ImportError:
             print("\nNote: Range assessment not available yet.")
