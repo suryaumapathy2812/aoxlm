@@ -5,6 +5,9 @@ Provides interpretable, research-based feature extraction for:
 - Fluency (speech rate, pauses, hesitations, flow)
 - Range (vocabulary diversity, lexical sophistication)
 - Accuracy (grammar patterns) - coming soon
+
+Also provides standalone calculation functions in `calculations` module
+that can be imported independently for testing or sharing.
 """
 
 from .fluency import (
@@ -25,6 +28,9 @@ from .range import (
     assess_range,
 )
 
+# Standalone calculations (shareable with teammates)
+from . import calculations
+
 __all__ = [
     # Fluency
     "FluencyAssessor",
@@ -40,4 +46,6 @@ __all__ = [
     "RangeFeatures",
     "RangeScore",
     "assess_range",
+    # Calculations module
+    "calculations",
 ]
