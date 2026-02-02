@@ -24,11 +24,24 @@ Example:
     >>> print(result.sub_scores)  # {"diversity": 72.5, "sophistication": 65.0, ...}
 """
 
-import re
-import math
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Set, Optional, Tuple
 from collections import Counter
+
+# Import pure calculation functions from calculations.py
+from .calculations import (
+    calculate_ttr,
+    calculate_root_ttr,
+    calculate_corrected_ttr,
+    calculate_hapax_ratio,
+    calculate_lexical_density,
+    calculate_avg_word_length,
+    calculate_long_word_ratio,
+    count_syllables,
+    tokenize,
+    get_word_frequencies,
+    score_to_cefr_level,
+)
 
 
 # Common English words (high frequency - A1/A2 level)
@@ -1762,6 +1775,8 @@ class RangeFeatureExtractor:
         """
         Extract range features from text.
 
+        Uses pure calculation functions from calculations.py.
+
         Args:
             text: Transcription text
 
@@ -1771,21 +1786,21 @@ class RangeFeatureExtractor:
         if not text or not text.strip():
             return RangeFeatures(), [], []
 
-        # Tokenize
-        words = self._tokenize(text)
+        # Tokenize (using calculations.py)
+        words = tokenize(text)
 
         if not words:
             return RangeFeatures(), [], []
 
-        # Basic counts
+        # Basic counts (using calculations.py)
         total_words = len(words)
-        word_freq = Counter(words)
+        word_freq = get_word_frequencies(words)
         unique_words = len(word_freq)
 
-        # 1. LEXICAL DIVERSITY
-        ttr = unique_words / total_words if total_words > 0 else 0
-        root_ttr = unique_words / math.sqrt(total_words) if total_words > 0 else 0
-        cttr = unique_words / math.sqrt(2 * total_words) if total_words > 0 else 0
+        # 1. LEXICAL DIVERSITY (using calculations.py)
+        ttr = calculate_ttr(total_words, unique_words)
+        root_ttr = calculate_root_ttr(total_words, unique_words)
+        cttr = calculate_corrected_ttr(total_words, unique_words)
 
         # 2. WORD SOPHISTICATION
         common_count = sum(1 for w in words if w in self.common_words)
@@ -1806,13 +1821,10 @@ class RangeFeatureExtractor:
         academic_ratio = academic_count / total_words if total_words > 0 else 0
         rare_ratio = rare_count / total_words if total_words > 0 else 0
 
-        # 3. VOCABULARY BREADTH
-        word_lengths = [len(w) for w in words]
-        avg_word_length = sum(word_lengths) / len(word_lengths) if word_lengths else 0
-        long_word_count = sum(1 for l in word_lengths if l > 6)
-        long_word_ratio = long_word_count / total_words if total_words > 0 else 0
-
-        syllable_counts = [self._count_syllables(w) for w in words]
+        # 3. VOCABULARY BREADTH (using calculations.py)
+        avg_word_len = calculate_avg_word_length(words)
+        long_word_rat = calculate_long_word_ratio(words, threshold=6)
+        syllable_counts = [count_syllables(w) for w in words]
         avg_syllables = (
             sum(syllable_counts) / len(syllable_counts) if syllable_counts else 0
         )
@@ -1820,13 +1832,12 @@ class RangeFeatureExtractor:
         # 4. LEXICAL DENSITY
         content_words = [w for w in words if w not in self.function_words]
         content_ratio = len(content_words) / total_words if total_words > 0 else 0
-        lexical_density = (
+        lex_density = (
             len(set(content_words)) / len(content_words) if content_words else 0
         )
 
-        # 5. WORD FREQUENCY DISTRIBUTION
-        hapax = sum(1 for w, c in word_freq.items() if c == 1)
-        hapax_ratio = hapax / unique_words if unique_words > 0 else 0
+        # 5. WORD FREQUENCY DISTRIBUTION (using calculations.py)
+        hapax, hapax_rat = calculate_hapax_ratio(word_freq)
 
         features = RangeFeatures(
             # Diversity
@@ -1841,49 +1852,18 @@ class RangeFeatureExtractor:
             rare_word_ratio=rare_ratio,
             academic_word_count=academic_count,
             # Breadth
-            avg_word_length=avg_word_length,
-            long_word_ratio=long_word_ratio,
+            avg_word_length=avg_word_len,
+            long_word_ratio=long_word_rat,
             avg_syllables=avg_syllables,
             # Density
             content_word_ratio=content_ratio,
-            lexical_density=lexical_density,
+            lexical_density=lex_density,
             # Distribution
             hapax_legomena=hapax,
-            hapax_ratio=hapax_ratio,
+            hapax_ratio=hapax_rat,
         )
 
         return features, list(set(academic_found)), rare_found
-
-    def _tokenize(self, text: str) -> List[str]:
-        """Tokenize text into lowercase words."""
-        # Remove punctuation and split
-        text = text.lower()
-        text = re.sub(r"[^\w\s']", " ", text)
-        words = text.split()
-
-        # Clean up
-        words = [w.strip("'") for w in words if w and len(w) > 0 and not w.isdigit()]
-
-        return words
-
-    def _count_syllables(self, word: str) -> int:
-        """Estimate syllable count for a word."""
-        word = word.lower()
-        vowels = "aeiouy"
-        count = 0
-        prev_vowel = False
-
-        for char in word:
-            is_vowel = char in vowels
-            if is_vowel and not prev_vowel:
-                count += 1
-            prev_vowel = is_vowel
-
-        # Adjust for silent e
-        if word.endswith("e") and count > 1:
-            count -= 1
-
-        return max(1, count)
 
 
 class RangeScorer:
@@ -2157,14 +2137,7 @@ class RangeScorer:
 
     def _score_to_level(self, score: float) -> str:
         """Convert numeric score to CEFR level."""
-        if score < 35:
-            return "A1"
-        elif score < 55:
-            return "A2"
-        elif score < 75:
-            return "B1"
-        else:
-            return "B2+"
+        return score_to_cefr_level(score)
 
     def _calculate_confidence(
         self,

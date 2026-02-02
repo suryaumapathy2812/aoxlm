@@ -25,7 +25,25 @@ Example:
 
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Tuple
-import numpy as np
+
+# Import pure calculation functions from calculations.py
+from .calculations import (
+    calculate_wpm,
+    calculate_articulation_rate,
+    calculate_syllables_per_second,
+    detect_pauses,
+    calculate_pause_metrics,
+    calculate_speech_time,
+    detect_fillers,
+    calculate_filler_rate,
+    detect_repetitions,
+    detect_false_starts,
+    calculate_speech_rate_variability,
+    calculate_mean_run_length,
+    count_syllables,
+    score_to_cefr_level,
+    FILLER_WORDS_EN,
+)
 
 
 # CEFR Fluency Benchmarks (based on research)
@@ -34,30 +52,6 @@ CEFR_WPM_BENCHMARKS = {
     "A2": {"min": 80, "max": 110, "typical": 95},
     "B1": {"min": 110, "max": 140, "typical": 125},
     "B2+": {"min": 140, "max": 180, "typical": 160},
-}
-
-# Filler words by language
-FILLER_WORDS = {
-    "en": [
-        "um",
-        "uh",
-        "er",
-        "ah",
-        "eh",
-        "mm",
-        "hmm",
-        "like",
-        "you know",
-        "i mean",
-        "basically",
-        "actually",
-        "sort of",
-        "kind of",
-        "well",
-        "so",
-        "right",
-        "okay",
-    ],
 }
 
 # Pause thresholds (in seconds)
@@ -151,6 +145,8 @@ class FluencyFeatureExtractor:
     """
     Extract fluency features from transcription with word timestamps.
 
+    Uses pure calculation functions from calculations.py for all computations.
+
     Example:
         >>> extractor = FluencyFeatureExtractor()
         >>> words = [
@@ -172,7 +168,7 @@ class FluencyFeatureExtractor:
         self.language = language
         self.pause_threshold = pause_threshold
         self.long_pause_threshold = long_pause_threshold
-        self.fillers = set(FILLER_WORDS.get(language, FILLER_WORDS["en"]))
+        self.fillers = FILLER_WORDS_EN  # From calculations.py
 
     def extract(
         self,
@@ -195,196 +191,54 @@ class FluencyFeatureExtractor:
         # Basic counts
         word_count = len(words)
 
-        # 1. SPEECH RATE
-        wpm = (word_count / duration) * 60
-        syllables = self._estimate_syllables(words)
-        syllables_per_second = syllables / duration
+        # 1. SPEECH RATE (using calculations.py)
+        wpm = calculate_wpm(word_count, duration)
+        syllables = sum(count_syllables(w.get("word", "")) for w in words)
+        syllables_per_sec = calculate_syllables_per_second(syllables, duration)
 
-        # 2. PAUSE ANALYSIS
-        pauses = self._extract_pauses(words)
-        num_pauses = len(pauses)
-        num_long_pauses = sum(1 for p in pauses if p >= self.long_pause_threshold)
-        total_pause_time = sum(pauses)
-        mean_pause_duration = np.mean(pauses) if pauses else 0.0
-        pause_ratio = total_pause_time / duration if duration > 0 else 0.0
-        pause_rate = (num_pauses / duration) * 60 if duration > 0 else 0.0
+        # 2. PAUSE ANALYSIS (using calculations.py)
+        pauses = detect_pauses(words, threshold_seconds=self.pause_threshold)
+        pause_metrics = calculate_pause_metrics(
+            pauses, duration, long_pause_threshold=self.long_pause_threshold
+        )
+        speech_time = calculate_speech_time(duration, pause_metrics["total_time"])
+        articulation_rate = calculate_articulation_rate(word_count, speech_time)
 
-        # Speech time (excluding pauses)
-        speech_time = duration - total_pause_time
-        articulation_rate = (word_count / speech_time) * 60 if speech_time > 0 else 0.0
+        # 3. HESITATION MARKERS (using calculations.py)
+        filler_count, _ = detect_fillers(words, self.fillers)
+        filler_rate = calculate_filler_rate(filler_count, duration)
+        repetition_count = detect_repetitions(words, self.fillers)
+        false_start_count = detect_false_starts(words, self.long_pause_threshold)
 
-        # 3. HESITATION MARKERS
-        filler_count, filler_words = self._count_fillers(words)
-        filler_rate = (filler_count / duration) * 60 if duration > 0 else 0.0
-        repetition_count = self._count_repetitions(words)
-        false_start_count = self._count_false_starts(words)
-
-        # 4. FLOW ANALYSIS
-        speech_rate_variability = self._calculate_rate_variability(words)
-        mean_run_length = self._calculate_mean_run_length(words, pauses)
+        # 4. FLOW ANALYSIS (using calculations.py)
+        rate_variability = calculate_speech_rate_variability(words)
+        mean_run = calculate_mean_run_length(words, self.pause_threshold)
 
         return FluencyFeatures(
             # Speech rate
             wpm=wpm,
-            syllables_per_second=syllables_per_second,
+            syllables_per_second=syllables_per_sec,
             articulation_rate=articulation_rate,
             # Pauses
-            num_pauses=num_pauses,
-            num_long_pauses=num_long_pauses,
-            total_pause_time=total_pause_time,
-            mean_pause_duration=mean_pause_duration,
-            pause_ratio=pause_ratio,
-            pause_rate=pause_rate,
+            num_pauses=pause_metrics["count"],
+            num_long_pauses=pause_metrics["long_pause_count"],
+            total_pause_time=pause_metrics["total_time"],
+            mean_pause_duration=float(pause_metrics["mean_duration"]),
+            pause_ratio=pause_metrics["pause_ratio"],
+            pause_rate=pause_metrics["pause_rate"],
             # Hesitations
             filler_count=filler_count,
             filler_rate=filler_rate,
             repetition_count=repetition_count,
             false_start_count=false_start_count,
             # Flow
-            speech_rate_variability=speech_rate_variability,
-            mean_run_length=mean_run_length,
+            speech_rate_variability=float(rate_variability),
+            mean_run_length=float(mean_run),
             # Meta
             word_count=word_count,
             duration=duration,
             speech_time=speech_time,
         )
-
-    def _extract_pauses(self, words: List[Dict]) -> List[float]:
-        """Extract pause durations between words."""
-        pauses = []
-        for i in range(1, len(words)):
-            prev_end = words[i - 1].get("end", 0)
-            curr_start = words[i].get("start", 0)
-            gap = curr_start - prev_end
-
-            if gap >= self.pause_threshold:
-                pauses.append(gap)
-
-        return pauses
-
-    def _estimate_syllables(self, words: List[Dict]) -> int:
-        """Estimate syllable count (rough approximation)."""
-        total = 0
-        for w in words:
-            word = w.get("word", "").lower().strip()
-            # Simple heuristic: count vowel groups
-            vowels = "aeiouy"
-            count = 0
-            prev_vowel = False
-            for char in word:
-                is_vowel = char in vowels
-                if is_vowel and not prev_vowel:
-                    count += 1
-                prev_vowel = is_vowel
-            total += max(1, count)  # At least 1 syllable per word
-        return total
-
-    def _count_fillers(self, words: List[Dict]) -> Tuple[int, List[str]]:
-        """Count filler words."""
-        count = 0
-        found = []
-        for w in words:
-            word = w.get("word", "").lower().strip()
-            if word in self.fillers:
-                count += 1
-                found.append(word)
-        return count, found
-
-    def _count_repetitions(self, words: List[Dict]) -> int:
-        """Count immediate word repetitions (stuttering)."""
-        count = 0
-        for i in range(1, len(words)):
-            prev_word = words[i - 1].get("word", "").lower().strip()
-            curr_word = words[i].get("word", "").lower().strip()
-
-            # Skip fillers
-            if prev_word in self.fillers or curr_word in self.fillers:
-                continue
-
-            if prev_word == curr_word and len(prev_word) > 1:
-                count += 1
-
-        return count
-
-    def _count_false_starts(self, words: List[Dict]) -> int:
-        """
-        Count false starts (abandoned words/phrases).
-        Heuristic: very short words followed by long pause.
-        """
-        count = 0
-        for i in range(len(words) - 1):
-            word = words[i].get("word", "")
-            next_start = words[i + 1].get("start", 0)
-            curr_end = words[i].get("end", 0)
-            gap = next_start - curr_end
-
-            # Short word + long pause = possible false start
-            if len(word) <= 2 and gap >= self.long_pause_threshold:
-                count += 1
-
-        return count
-
-    def _calculate_rate_variability(
-        self,
-        words: List[Dict],
-        window_size: float = 5.0,
-    ) -> float:
-        """Calculate speech rate variability across windows."""
-        if len(words) < 5:
-            return 0.0
-
-        start_time = words[0].get("start", 0)
-        end_time = words[-1].get("end", 0)
-
-        if end_time - start_time < window_size:
-            return 0.0
-
-        rates = []
-        current = start_time
-
-        while current + window_size <= end_time:
-            window_words = [
-                w for w in words if current <= w.get("start", 0) < current + window_size
-            ]
-            if window_words:
-                rate = (len(window_words) / window_size) * 60
-                rates.append(rate)
-            current += window_size / 2  # 50% overlap
-
-        return float(np.std(rates)) if len(rates) > 1 else 0.0
-
-    def _calculate_mean_run_length(
-        self,
-        words: List[Dict],
-        pauses: List[float],
-    ) -> float:
-        """Calculate mean number of words between pauses."""
-        if not words:
-            return 0.0
-
-        # Find pause positions
-        pause_indices = []
-        pause_idx = 0
-        for i in range(1, len(words)):
-            prev_end = words[i - 1].get("end", 0)
-            curr_start = words[i].get("start", 0)
-            gap = curr_start - prev_end
-
-            if gap >= self.pause_threshold:
-                pause_indices.append(i)
-
-        if not pause_indices:
-            return float(len(words))
-
-        # Calculate run lengths
-        runs = []
-        prev_idx = 0
-        for idx in pause_indices:
-            runs.append(idx - prev_idx)
-            prev_idx = idx
-        runs.append(len(words) - prev_idx)
-
-        return float(np.mean(runs))
 
 
 class FluencyScorer:
@@ -608,14 +462,7 @@ class FluencyScorer:
 
     def _score_to_level(self, score: float) -> str:
         """Convert numeric score to CEFR level."""
-        if score < 35:
-            return "A1"
-        elif score < 55:
-            return "A2"
-        elif score < 75:
-            return "B1"
-        else:
-            return "B2+"
+        return score_to_cefr_level(score)
 
     def _calculate_confidence(
         self,
@@ -789,9 +636,9 @@ class FluencyAssessor:
         # Get duration
         if duration is None:
             if words:
-                duration = words[-1].get("end", 0)
+                duration = float(words[-1].get("end", 0))
             else:
-                duration = 0
+                duration = 0.0
 
         return self.assess(words, duration)
 
