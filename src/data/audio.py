@@ -51,7 +51,7 @@ class AudioProcessor:
         self,
         target_sample_rate: int = TARGET_SAMPLE_RATE,
         normalize: bool = True,
-        max_duration: Optional[float] = 60.0,  # 1 minute max (GPU memory safe)
+        max_duration: Optional[float] = None,  # No limit by default
     ):
         """
         Initialize audio processor.
@@ -59,7 +59,8 @@ class AudioProcessor:
         Args:
             target_sample_rate: Output sample rate (default 16kHz)
             normalize: Whether to normalize amplitude to [-1, 1]
-            max_duration: Maximum audio duration in seconds (None for unlimited)
+            max_duration: Maximum audio duration in seconds (None for unlimited).
+                          Set to 300.0 for GPU memory safety with large encoders.
         """
         self.target_sample_rate = target_sample_rate
         self.normalize = normalize
