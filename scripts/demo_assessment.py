@@ -5,9 +5,11 @@ Demo: CEFR Speech Assessment Pipeline
 Simple demonstration of the modular assessment pipeline.
 
 Usage:
-    uv run python scripts/demo_assessment.py data/1769858336827.mp3
-    uv run python scripts/demo_assessment.py data/audio.mp3 --device cuda
-    uv run python scripts/demo_assessment.py --url "https://s3.amazonaws.com/..."
+    uv run python scripts/demo_assessment.py data/audio.mp3
+    uv run python scripts/demo_assessment.py --device cuda data/audio.mp3
+    uv run python scripts/demo_assessment.py --device cuda --enable-wavlm data/audio.mp3
+    uv run python scripts/demo_assessment.py "https://example.com/audio.mp3"
+    uv run python scripts/demo_assessment.py --device cuda "https://s3.amazonaws.com/..."
 """
 
 import argparse
@@ -42,11 +44,11 @@ def main():
     parser.add_argument(
         "audio_path",
         nargs="?",
-        help="Path to audio file",
+        help="Path to audio file or URL (auto-detected)",
     )
     parser.add_argument(
         "--url",
-        help="URL to download audio from",
+        help="URL to download audio from (alternative to passing URL as audio_path)",
     )
     parser.add_argument(
         "--device",
@@ -86,24 +88,42 @@ def main():
         action="store_true",
         help="Disable phonology (pronunciation) assessment",
     )
+    parser.add_argument(
+        "--enable-wavlm",
+        action="store_true",
+        help="Enable WavLM-based pronunciation analysis (adds smoothness metric)",
+    )
+    parser.add_argument(
+        "--wavlm-model",
+        default="wavlm-base",
+        choices=["wavlm-base", "wavlm-large"],
+        help="WavLM model variant (default: wavlm-base, faster; wavlm-large more accurate)",
+    )
 
     args = parser.parse_args()
 
-    # Get audio path
+    # Get audio path (supports local files and URLs)
     if args.url:
         audio_path = download_audio(args.url)
     elif args.audio_path:
-        audio_path = args.audio_path
+        # Auto-detect if audio_path is a URL
+        if args.audio_path.startswith(("http://", "https://")):
+            audio_path = download_audio(args.audio_path)
+        else:
+            audio_path = args.audio_path
     else:
         # Default to sample file
         audio_path = "data/1769858336827.mp3"
         if not Path(audio_path).exists():
-            parser.error("No audio file specified. Use --url or provide a path.")
+            parser.error("No audio file specified. Provide a path or URL.")
 
-    # Check file exists
-    if not Path(audio_path).exists():
-        print(f"Error: Audio file not found: {audio_path}")
-        sys.exit(1)
+    # Check file exists (skip check if we just downloaded)
+    if not args.url and not (
+        args.audio_path and args.audio_path.startswith(("http://", "https://"))
+    ):
+        if not Path(audio_path).exists():
+            print(f"Error: Audio file not found: {audio_path}")
+            sys.exit(1)
 
     print("=" * 60)
     print("CEFR SPEECH ASSESSMENT")
@@ -111,6 +131,8 @@ def main():
     print(f"Audio: {audio_path}")
     print(f"Model: {args.model}")
     print(f"Device: {args.device}")
+    if args.enable_wavlm:
+        print(f"WavLM: {args.wavlm_model} (enabled)")
     print()
 
     # Create pipeline and assess
@@ -122,6 +144,8 @@ def main():
         range_weight=args.range_weight,
         enable_accuracy=not args.no_accuracy,
         enable_phonology=not args.no_phonology,
+        enable_wavlm=args.enable_wavlm,
+        wavlm_model=args.wavlm_model,
     )
 
     print("Transcribing and assessing...")

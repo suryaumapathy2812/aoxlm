@@ -570,6 +570,7 @@ class PhonologyScorer:
     2. Pitch CV / Intonation (monotone vs expressive)
     3. Energy CV / Stress patterns
     4. nPVI / Rhythm (stress-timing)
+    5. WavLM smoothness (optional) - neural speech flow analysis
 
     CEFR Benchmarks:
     - A1-A2: monotone, choppy rhythm, weak stress
@@ -577,21 +578,44 @@ class PhonologyScorer:
     - B2+: natural intonation, good rhythm, clear stress
     """
 
-    def __init__(self):
-        """Initialize scorer with default weights."""
-        self.weights = {
-            "confidence": 0.30,  # Whisper confidence (pronunciation clarity)
-            "intonation": 0.25,  # Pitch variation (monotone vs expressive)
-            "rhythm": 0.25,  # nPVI (stress-timing)
-            "stress": 0.20,  # Energy variation (stress patterns)
-        }
+    def __init__(self, enable_wavlm: bool = False):
+        """
+        Initialize scorer with default weights.
 
-    def score(self, features: PhonologyFeatures) -> PhonologyScore:
+        Args:
+            enable_wavlm: Whether WavLM smoothness is included in scoring
+        """
+        self.enable_wavlm = enable_wavlm
+
+        if enable_wavlm:
+            # Weights with WavLM (adds wavlm_smoothness at 25%)
+            self.weights = {
+                "confidence": 0.25,  # Whisper confidence (pronunciation clarity)
+                "intonation": 0.20,  # Pitch variation (monotone vs expressive)
+                "rhythm": 0.15,  # nPVI (stress-timing)
+                "stress": 0.15,  # Energy variation (stress patterns)
+                "wavlm_smoothness": 0.25,  # WavLM temporal smoothness
+            }
+        else:
+            # Original weights without WavLM
+            self.weights = {
+                "confidence": 0.30,  # Whisper confidence (pronunciation clarity)
+                "intonation": 0.25,  # Pitch variation (monotone vs expressive)
+                "rhythm": 0.25,  # nPVI (stress-timing)
+                "stress": 0.20,  # Energy variation (stress patterns)
+            }
+
+    def score(
+        self,
+        features: PhonologyFeatures,
+        wavlm_smoothness: Optional[float] = None,
+    ) -> PhonologyScore:
         """
         Score phonology features.
 
         Args:
             features: Extracted phonology features
+            wavlm_smoothness: WavLM temporal smoothness score (0-1), optional
 
         Returns:
             PhonologyScore with level, score, and feedback
@@ -614,8 +638,18 @@ class PhonologyScorer:
             "stress": self._score_stress(features),
         }
 
+        # Add WavLM smoothness if enabled and available
+        if self.enable_wavlm and wavlm_smoothness is not None:
+            sub_scores["wavlm_smoothness"] = self._score_wavlm_smoothness(
+                wavlm_smoothness
+            )
+
         # Weighted average
-        total_score = sum(sub_scores[k] * self.weights[k] for k in self.weights.keys())
+        total_score = sum(
+            sub_scores[k] * self.weights[k]
+            for k in self.weights.keys()
+            if k in sub_scores
+        )
 
         # Determine level
         level = score_to_cefr_level(total_score)
@@ -624,7 +658,9 @@ class PhonologyScorer:
         assessment_confidence = self._calculate_confidence(features)
 
         # Generate feedback
-        feedback = self._generate_feedback(features, sub_scores, level)
+        feedback = self._generate_feedback(
+            features, sub_scores, level, wavlm_smoothness
+        )
 
         return PhonologyScore(
             score=total_score,
@@ -757,6 +793,29 @@ class PhonologyScorer:
             else:
                 return 45
 
+    def _score_wavlm_smoothness(self, smoothness: float) -> float:
+        """
+        Score WavLM temporal smoothness (0-100).
+
+        WavLM smoothness measures frame-to-frame embedding similarity.
+        Lower smoothness indicates choppy/staccato speech patterns.
+
+        CEFR Benchmarks:
+        - A1-A2: smoothness < 0.80 (choppy, score 30-50)
+        - B1: smoothness 0.80-0.90 (developing, score 55-70)
+        - B2+: smoothness >= 0.90 (natural flow, score 75-95)
+        """
+        if smoothness >= 0.95:
+            return 95
+        elif smoothness >= 0.90:
+            return 80 + (smoothness - 0.90) * 300  # 80-95
+        elif smoothness >= 0.85:
+            return 65 + (smoothness - 0.85) * 300  # 65-80
+        elif smoothness >= 0.75:
+            return 45 + (smoothness - 0.75) * 200  # 45-65
+        else:
+            return max(20, smoothness * 60)  # 0-45
+
     def _calculate_confidence(self, features: PhonologyFeatures) -> float:
         """Calculate confidence in the assessment."""
         confidence = 0.4  # Base
@@ -782,9 +841,26 @@ class PhonologyScorer:
         features: PhonologyFeatures,
         sub_scores: Dict[str, float],
         level: str,
+        wavlm_smoothness: Optional[float] = None,
     ) -> List[str]:
         """Generate actionable feedback based on new metrics."""
         feedback = []
+
+        # WAVLM SMOOTHNESS feedback (if enabled)
+        if self.enable_wavlm and "wavlm_smoothness" in sub_scores:
+            wavlm_score = sub_scores["wavlm_smoothness"]
+            if wavlm_score < 50:
+                feedback.append(
+                    "Speech flow is choppy/staccato. "
+                    "Practice speaking in longer phrases with smooth connections between words."
+                )
+            elif wavlm_score < 65:
+                feedback.append(
+                    "Speech flow is developing. "
+                    "Work on connecting words more smoothly within thought groups."
+                )
+            elif wavlm_score >= 80:
+                feedback.append("Good speech flow - smooth and natural transitions.")
 
         # INTONATION feedback (pitch CV)
         if features.audio_analyzed:
@@ -873,30 +949,60 @@ class PhonologyAssessor:
     Complete phonology assessment pipeline.
 
     Combines feature extraction and scoring.
+    Optionally uses WavLM for enhanced pronunciation analysis.
 
     Example:
         >>> assessor = PhonologyAssessor()
         >>> result = assessor.assess(words, audio_path="audio.mp3")
         >>> print(f"Level: {result.level}, Score: {result.score:.1f}")
+
+        # With WavLM enhancement
+        >>> assessor = PhonologyAssessor(enable_wavlm=True, device="cuda")
+        >>> result = assessor.assess(words, audio_path="audio.mp3")
     """
 
     def __init__(
         self,
         low_confidence_threshold: float = 0.7,
         sample_rate: int = 16000,
+        enable_wavlm: bool = False,
+        wavlm_model: str = "wavlm-base",
+        device: Optional[str] = None,
     ):
-        """Initialize assessor."""
+        """
+        Initialize assessor.
+
+        Args:
+            low_confidence_threshold: Confidence below this = pronunciation issue
+            sample_rate: Audio sample rate for analysis
+            enable_wavlm: Enable WavLM-based smoothness analysis
+            wavlm_model: WavLM model variant (wavlm-base or wavlm-large)
+            device: Device for WavLM (cuda/cpu). Auto-detected if None.
+        """
         self.extractor = PhonologyFeatureExtractor(
             low_confidence_threshold=low_confidence_threshold,
             sample_rate=sample_rate,
         )
-        self.scorer = PhonologyScorer()
+        self.scorer = PhonologyScorer(enable_wavlm=enable_wavlm)
+
+        self.enable_wavlm = enable_wavlm
+        self.wavlm_extractor = None
+
+        if enable_wavlm:
+            from .wavlm_features import WavLMFeatureExtractor
+
+            self.wavlm_extractor = WavLMFeatureExtractor(
+                model_name=wavlm_model,
+                device=device,
+                sample_rate=sample_rate,
+            )
 
     def assess(
         self,
         words: List[Dict],
         audio_path: Optional[str] = None,
         audio_array: Optional[np.ndarray] = None,
+        verbose: bool = False,
     ) -> PhonologyScore:
         """
         Assess phonology from transcription and optionally audio.
@@ -905,16 +1011,36 @@ class PhonologyAssessor:
             words: List of dicts with "word", "start", "end", "confidence"
             audio_path: Path to audio file (optional)
             audio_array: Pre-loaded audio array (optional)
+            verbose: Print progress for WavLM processing
 
         Returns:
             PhonologyScore with level, score, features, and feedback
         """
+        # Extract standard phonology features
         features = self.extractor.extract(
             words=words,
             audio_path=audio_path,
             audio_array=audio_array,
         )
-        return self.scorer.score(features)
+
+        # Extract WavLM smoothness if enabled
+        wavlm_smoothness = None
+        if (
+            self.enable_wavlm
+            and self.wavlm_extractor
+            and (audio_path or audio_array is not None)
+        ):
+            try:
+                wavlm_features, _ = self.wavlm_extractor.extract(
+                    audio_path=audio_path,
+                    audio_array=audio_array,
+                    verbose=verbose,
+                )
+                wavlm_smoothness = wavlm_features.temporal_smoothness
+            except Exception as e:
+                print(f"Warning: WavLM extraction failed: {e}")
+
+        return self.scorer.score(features, wavlm_smoothness=wavlm_smoothness)
 
 
 # =============================================================================

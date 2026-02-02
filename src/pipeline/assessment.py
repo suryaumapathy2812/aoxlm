@@ -188,6 +188,9 @@ class AssessmentPipeline:
         phonology_weight: float = 0.15,
         enable_accuracy: bool = True,
         enable_phonology: bool = True,
+        enable_wavlm: bool = False,
+        wavlm_model: str = "wavlm-base",
+        wavlm_device: Optional[str] = None,
         **transcriber_kwargs,
     ):
         """
@@ -204,6 +207,9 @@ class AssessmentPipeline:
             phonology_weight: Weight for phonology (default: 0.15)
             enable_accuracy: Run accuracy assessment (default: True)
             enable_phonology: Run phonology assessment (default: True)
+            enable_wavlm: Enable WavLM-based pronunciation analysis (default: False)
+            wavlm_model: WavLM model variant (wavlm-base or wavlm-large)
+            wavlm_device: Device for WavLM (default: same as transcription device)
             **transcriber_kwargs: Additional transcriber configuration
         """
         self.transcriber = get_transcriber(
@@ -222,7 +228,16 @@ class AssessmentPipeline:
         self.accuracy_assessor = (
             AccuracyAssessor(language=lang_code) if enable_accuracy else None
         )
-        self.phonology_assessor = PhonologyAssessor() if enable_phonology else None
+
+        # Phonology assessor with optional WavLM
+        if enable_phonology:
+            self.phonology_assessor = PhonologyAssessor(
+                enable_wavlm=enable_wavlm,
+                wavlm_model=wavlm_model,
+                device=wavlm_device or device,
+            )
+        else:
+            self.phonology_assessor = None
 
         self.fluency_weight = fluency_weight
         self.range_weight = range_weight
@@ -246,6 +261,7 @@ class AssessmentPipeline:
         self.language = language
         self.enable_accuracy = enable_accuracy
         self.enable_phonology = enable_phonology
+        self.enable_wavlm = enable_wavlm
 
     def assess(
         self,
@@ -470,6 +486,7 @@ def assess_audio(
     transcriber: str = "faster-whisper",
     model_size: str = "large-v3",
     device: str = "cuda",
+    enable_wavlm: bool = False,
     **kwargs,
 ) -> AssessmentResult:
     """
@@ -480,6 +497,7 @@ def assess_audio(
         transcriber: Transcription backend
         model_size: Model size
         device: Device to use
+        enable_wavlm: Enable WavLM-based pronunciation analysis
         **kwargs: Additional options
 
     Returns:
@@ -488,10 +506,14 @@ def assess_audio(
     Example:
         result = assess_audio("speech.mp3", device="cuda")
         print(result.level)  # "B1"
+
+        # With WavLM enhancement
+        result = assess_audio("speech.mp3", device="cuda", enable_wavlm=True)
     """
     pipeline = AssessmentPipeline(
         transcriber=transcriber,
         model_size=model_size,
         device=device,
+        enable_wavlm=enable_wavlm,
     )
     return pipeline.assess(audio_path, **kwargs)
