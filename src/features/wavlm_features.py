@@ -479,6 +479,7 @@ def assess_pronunciation_wavlm(
 
 if __name__ == "__main__":
     import sys
+    import traceback
 
     if len(sys.argv) < 2:
         print("Usage: python wavlm_features.py <audio_path> [device]")
@@ -494,25 +495,34 @@ if __name__ == "__main__":
     print(f"Device: {device or 'auto'}")
     print()
 
-    assessor = WavLMPronunciationAssessor(device=device)
-    result = assessor.assess(audio_path=audio_path)
+    try:
+        assessor = WavLMPronunciationAssessor(device=device)
+        print("Running assessment...")
+        result = assessor.assess(audio_path=audio_path)
 
-    print(f"Score: {result.score:.1f}/100")
-    print(f"Level: {result.level}")
-    print(f"Confidence: {result.confidence:.1%}")
-    print()
-    print("Sub-scores:")
-    for name, score in result.sub_scores.items():
-        print(f"  {name:15}: {score:.1f}")
-    print()
-    print("Features:")
-    print(f"  Embedding consistency: {result.features.embedding_consistency:.3f}")
-    print(f"  Temporal smoothness:   {result.features.temporal_smoothness:.3f}")
-    print(f"  Low norm ratio:        {result.features.low_norm_ratio:.3f}")
-    print(f"  Frames:                {result.features.num_frames}")
-    print(f"  Duration:              {result.features.duration:.1f}s")
-    print()
-    if result.feedback:
-        print("Feedback:")
-        for fb in result.feedback:
-            print(f"  - {fb}")
+        print()
+        print("=" * 60)
+        print("RESULTS")
+        print("=" * 60)
+        print(f"Score: {result.score:.1f}/100")
+        print(f"Level: {result.level}")
+        print(f"Confidence: {result.confidence:.1%}")
+        print()
+        print("Sub-scores:")
+        for name, score in result.sub_scores.items():
+            print(f"  {name:15}: {score:.1f}")
+        print()
+        print("Features:")
+        print(f"  Embedding consistency: {result.features.embedding_consistency:.3f}")
+        print(f"  Temporal smoothness:   {result.features.temporal_smoothness:.3f}")
+        print(f"  Low norm ratio:        {result.features.low_norm_ratio:.3f}")
+        print(f"  Frames:                {result.features.num_frames}")
+        print(f"  Duration:              {result.features.duration:.1f}s")
+        print()
+        if result.feedback:
+            print("Feedback:")
+            for fb in result.feedback:
+                print(f"  - {fb}")
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        traceback.print_exc()
