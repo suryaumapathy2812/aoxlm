@@ -48,6 +48,15 @@ from .phonology import (
     assess_phonology,
 )
 
+from .wavlm_features import (
+    WavLMPronunciationAssessor,
+    WavLMFeatureExtractor,
+    WavLMPronunciationScorer,
+    WavLMFeatures,
+    WavLMPronunciationScore,
+    assess_pronunciation_wavlm,
+)
+
 # Standalone calculations (shareable with teammates)
 from . import calculations
 
@@ -81,6 +90,13 @@ __all__ = [
     "PhonologyFeatures",
     "PhonologyScore",
     "assess_phonology",
+    # WavLM Pronunciation
+    "WavLMPronunciationAssessor",
+    "WavLMFeatureExtractor",
+    "WavLMPronunciationScorer",
+    "WavLMFeatures",
+    "WavLMPronunciationScore",
+    "assess_pronunciation_wavlm",
     # Calculations module
     "calculations",
 ]
