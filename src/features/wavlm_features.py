@@ -135,6 +135,7 @@ class WavLMFeatureExtractor:
         audio_path: Optional[str] = None,
         audio_array: Optional[np.ndarray] = None,
         return_embeddings: bool = False,
+        chunk_duration: float = 30.0,  # Process in 30-second chunks
     ) -> Tuple[WavLMFeatures, Optional[np.ndarray]]:
         """
         Extract WavLM features from audio.
@@ -143,6 +144,7 @@ class WavLMFeatureExtractor:
             audio_path: Path to audio file
             audio_array: Pre-loaded audio array (16kHz)
             return_embeddings: Whether to return raw embeddings
+            chunk_duration: Duration of each chunk in seconds (for long audio)
 
         Returns:
             Tuple of (WavLMFeatures, optional embeddings)
@@ -159,18 +161,52 @@ class WavLMFeatureExtractor:
         duration = len(audio_array) / self.sample_rate
         print(f"Audio loaded: {len(audio_array)} samples, {duration:.1f}s", flush=True)
 
-        # Convert to tensor
-        audio_tensor = torch.from_numpy(audio_array).float()
-        print(f"Tensor shape: {audio_tensor.shape}", flush=True)
+        # Process in chunks for long audio (> chunk_duration)
+        chunk_samples = int(chunk_duration * self.sample_rate)
 
-        # Get embeddings [1, T, D]
-        print("Running WavLM inference...", flush=True)
-        with torch.no_grad():
-            embeddings = self.encoder(audio_tensor, sampling_rate=self.sample_rate)
-        print(f"Embeddings shape: {embeddings.shape}", flush=True)
+        if len(audio_array) > chunk_samples * 1.5:  # Only chunk if significantly longer
+            print(f"Processing in {chunk_duration}s chunks...", flush=True)
+            embeddings_list = []
+            num_chunks = (len(audio_array) + chunk_samples - 1) // chunk_samples
 
-        embeddings = embeddings.squeeze(0)  # [T, D]
-        embeddings_np = embeddings.cpu().numpy()
+            for i in range(num_chunks):
+                start = i * chunk_samples
+                end = min((i + 1) * chunk_samples, len(audio_array))
+                chunk = audio_array[start:end]
+
+                audio_tensor = torch.from_numpy(chunk).float()
+
+                print(
+                    f"  Chunk {i + 1}/{num_chunks}: {len(chunk) / self.sample_rate:.1f}s",
+                    flush=True,
+                )
+                with torch.no_grad():
+                    chunk_emb = self.encoder(
+                        audio_tensor, sampling_rate=self.sample_rate
+                    )
+                embeddings_list.append(chunk_emb.squeeze(0).cpu())
+
+                # Clear GPU memory
+                del audio_tensor, chunk_emb
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # Concatenate all chunks
+            embeddings = torch.cat(embeddings_list, dim=0)
+            embeddings_np = embeddings.numpy()
+            print(f"Total embeddings shape: {embeddings_np.shape}", flush=True)
+        else:
+            # Short audio - process at once
+            audio_tensor = torch.from_numpy(audio_array).float()
+            print(f"Tensor shape: {audio_tensor.shape}", flush=True)
+
+            print("Running WavLM inference...", flush=True)
+            with torch.no_grad():
+                embeddings = self.encoder(audio_tensor, sampling_rate=self.sample_rate)
+            print(f"Embeddings shape: {embeddings.shape}", flush=True)
+
+            embeddings = embeddings.squeeze(0)  # [T, D]
+            embeddings_np = embeddings.cpu().numpy()
 
         # Extract features
         print("Computing features...", flush=True)
