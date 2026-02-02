@@ -48,6 +48,8 @@ dependencies = [
     "openai-whisper>=20231117",
     "whisperx>=3.0.0",
     "faster-whisper>=1.2.1",
+    "textstat>=0.7.12",
+    "lexicalrichness>=0.5.1",
 ]
 
 [project.optional-dependencies]
