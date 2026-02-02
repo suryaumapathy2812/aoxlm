@@ -4,6 +4,12 @@ CEFR Assessment Pipeline
 Combines transcription and feature-based assessment into a unified pipeline.
 Modular design allows swapping transcription backends and assessment methods.
 
+Assesses all four CEFR criteria:
+- Fluency: Speech rate, pauses, hesitations
+- Range: Vocabulary diversity, sophistication
+- Accuracy: Grammar errors, error patterns
+- Phonology: Pronunciation quality, prosody
+
 Usage:
     from src.pipeline import AssessmentPipeline
 
@@ -22,6 +28,8 @@ Usage:
     print(result.score)           # 68.5
     print(result.fluency)         # FluencyScore
     print(result.range)           # RangeScore
+    print(result.accuracy)        # AccuracyScore
+    print(result.phonology)       # PhonologyScore
     print(result.transcription)   # TranscriptionResult
 """
 
@@ -36,6 +44,8 @@ from ..transcription import (
 )
 from ..features.fluency import FluencyAssessor, FluencyScore
 from ..features.range import RangeAssessor, RangeScore
+from ..features.accuracy import AccuracyAssessor, AccuracyScore
+from ..features.phonology import PhonologyAssessor, PhonologyScore
 
 
 @dataclass
@@ -43,8 +53,8 @@ class AssessmentResult:
     """
     Complete CEFR assessment result.
 
-    Combines transcription, fluency, and range assessments
-    into a single unified result.
+    Combines transcription, fluency, range, accuracy, and phonology
+    assessments into a single unified result.
     """
 
     # Overall assessment
@@ -55,17 +65,21 @@ class AssessmentResult:
     # Component scores
     fluency: FluencyScore
     range: RangeScore
+    accuracy: Optional[AccuracyScore] = None
+    phonology: Optional[PhonologyScore] = None
 
     # Weights used
-    fluency_weight: float = 0.6
-    range_weight: float = 0.4
+    fluency_weight: float = 0.35
+    range_weight: float = 0.25
+    accuracy_weight: float = 0.25
+    phonology_weight: float = 0.15
 
     # Source data
     transcription: Optional[TranscriptionResult] = None
     audio_path: Optional[str] = None
 
     # Metadata
-    pipeline_version: str = "1.0.0"
+    pipeline_version: str = "2.0.0"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -75,8 +89,12 @@ class AssessmentResult:
             "confidence": round(self.confidence, 3),
             "fluency_weight": self.fluency_weight,
             "range_weight": self.range_weight,
+            "accuracy_weight": self.accuracy_weight,
+            "phonology_weight": self.phonology_weight,
             "fluency": self.fluency.to_dict(),
             "range": self.range.to_dict(),
+            "accuracy": self.accuracy.to_dict() if self.accuracy else None,
+            "phonology": self.phonology.to_dict() if self.phonology else None,
             "transcription": self.transcription.to_dict()
             if self.transcription
             else None,
@@ -96,9 +114,19 @@ class AssessmentResult:
             f"Confidence: {self.confidence:.1%}",
             f"",
             f"Breakdown:",
-            f"  Fluency ({self.fluency_weight:.0%}): {self.fluency.level} ({self.fluency.score:.1f})",
-            f"  Range ({self.range_weight:.0%}):   {self.range.level} ({self.range.score:.1f})",
+            f"  Fluency ({self.fluency_weight:.0%}):   {self.fluency.level} ({self.fluency.score:.1f})",
+            f"  Range ({self.range_weight:.0%}):     {self.range.level} ({self.range.score:.1f})",
         ]
+
+        if self.accuracy:
+            lines.append(
+                f"  Accuracy ({self.accuracy_weight:.0%}): {self.accuracy.level} ({self.accuracy.score:.1f})"
+            )
+
+        if self.phonology:
+            lines.append(
+                f"  Phonology ({self.phonology_weight:.0%}): {self.phonology.level} ({self.phonology.score:.1f})"
+            )
 
         if self.fluency.feedback:
             lines.extend(["", "Fluency Feedback:"])
@@ -108,6 +136,16 @@ class AssessmentResult:
         if self.range.feedback:
             lines.extend(["", "Range Feedback:"])
             for fb in self.range.feedback[:3]:
+                lines.append(f"  - {fb}")
+
+        if self.accuracy and self.accuracy.feedback:
+            lines.extend(["", "Accuracy Feedback:"])
+            for fb in self.accuracy.feedback[:3]:
+                lines.append(f"  - {fb}")
+
+        if self.phonology and self.phonology.feedback:
+            lines.extend(["", "Phonology Feedback:"])
+            for fb in self.phonology.feedback[:3]:
                 lines.append(f"  - {fb}")
 
         lines.append("")
@@ -124,7 +162,9 @@ class AssessmentPipeline:
     1. Audio transcription (pluggable backend)
     2. Fluency assessment (from word timestamps)
     3. Range assessment (from transcription text)
-    4. Combined CEFR scoring
+    4. Accuracy assessment (grammar errors)
+    5. Phonology assessment (pronunciation quality)
+    6. Combined CEFR scoring
 
     Example:
         pipeline = AssessmentPipeline(
@@ -142,8 +182,12 @@ class AssessmentPipeline:
         model_size: str = "large-v3",
         device: str = "cuda",
         language: str = "en",
-        fluency_weight: float = 0.6,
-        range_weight: float = 0.4,
+        fluency_weight: float = 0.35,
+        range_weight: float = 0.25,
+        accuracy_weight: float = 0.25,
+        phonology_weight: float = 0.15,
+        enable_accuracy: bool = True,
+        enable_phonology: bool = True,
         **transcriber_kwargs,
     ):
         """
@@ -154,8 +198,12 @@ class AssessmentPipeline:
             model_size: Model size for transcription
             device: Device to use (cuda, cpu)
             language: Target language
-            fluency_weight: Weight for fluency in overall score (default: 0.6)
-            range_weight: Weight for range in overall score (default: 0.4)
+            fluency_weight: Weight for fluency (default: 0.35)
+            range_weight: Weight for range (default: 0.25)
+            accuracy_weight: Weight for accuracy (default: 0.25)
+            phonology_weight: Weight for phonology (default: 0.15)
+            enable_accuracy: Run accuracy assessment (default: True)
+            enable_phonology: Run phonology assessment (default: True)
             **transcriber_kwargs: Additional transcriber configuration
         """
         self.transcriber = get_transcriber(
@@ -166,12 +214,38 @@ class AssessmentPipeline:
             **transcriber_kwargs,
         )
 
+        # Language code mapping
+        lang_code = "en-US" if language == "en" else language
+
         self.fluency_assessor = FluencyAssessor(language=language)
         self.range_assessor = RangeAssessor(language=language)
+        self.accuracy_assessor = (
+            AccuracyAssessor(language=lang_code) if enable_accuracy else None
+        )
+        self.phonology_assessor = PhonologyAssessor() if enable_phonology else None
 
         self.fluency_weight = fluency_weight
         self.range_weight = range_weight
+        self.accuracy_weight = accuracy_weight if enable_accuracy else 0.0
+        self.phonology_weight = phonology_weight if enable_phonology else 0.0
+
+        # Normalize weights if not all assessments enabled
+        if not enable_accuracy or not enable_phonology:
+            total = (
+                self.fluency_weight
+                + self.range_weight
+                + self.accuracy_weight
+                + self.phonology_weight
+            )
+            if total > 0:
+                self.fluency_weight /= total
+                self.range_weight /= total
+                self.accuracy_weight /= total
+                self.phonology_weight /= total
+
         self.language = language
+        self.enable_accuracy = enable_accuracy
+        self.enable_phonology = enable_phonology
 
     def assess(
         self,
@@ -209,20 +283,41 @@ class AssessmentPipeline:
         # 3. Assess range from transcription text
         range_score = self.range_assessor.assess(transcription_result.text)
 
-        # 4. Calculate combined score
+        # 4. Assess accuracy (grammar) from transcription text
+        accuracy_score = None
+        if self.accuracy_assessor:
+            accuracy_score = self.accuracy_assessor.assess(transcription_result.text)
+
+        # 5. Assess phonology from word confidences and audio
+        phonology_score = None
+        if self.phonology_assessor:
+            phonology_score = self.phonology_assessor.assess(
+                words=words,
+                audio_path=audio_path,
+            )
+
+        # 6. Calculate combined score
         combined_score = (
             fluency_score.score * self.fluency_weight
             + range_score.score * self.range_weight
         )
+        if accuracy_score:
+            combined_score += accuracy_score.score * self.accuracy_weight
+        if phonology_score:
+            combined_score += phonology_score.score * self.phonology_weight
 
-        # 5. Map to CEFR level
+        # 7. Map to CEFR level
         level = self._score_to_level(combined_score)
 
-        # 6. Calculate combined confidence
+        # 8. Calculate combined confidence
         combined_confidence = (
             fluency_score.confidence * self.fluency_weight
             + range_score.confidence * self.range_weight
         )
+        if accuracy_score:
+            combined_confidence += accuracy_score.confidence * self.accuracy_weight
+        if phonology_score:
+            combined_confidence += phonology_score.confidence * self.phonology_weight
 
         return AssessmentResult(
             level=level,
@@ -230,8 +325,12 @@ class AssessmentPipeline:
             confidence=combined_confidence,
             fluency=fluency_score,
             range=range_score,
+            accuracy=accuracy_score,
+            phonology=phonology_score,
             fluency_weight=self.fluency_weight,
             range_weight=self.range_weight,
+            accuracy_weight=self.accuracy_weight,
+            phonology_weight=self.phonology_weight,
             transcription=transcription_result,
             audio_path=audio_path,
         )
@@ -241,19 +340,21 @@ class AssessmentPipeline:
         text: str,
         words: Optional[List[Dict]] = None,
         duration: Optional[float] = None,
+        audio_path: Optional[str] = None,
     ) -> AssessmentResult:
         """
-        Assess CEFR level from text (without audio).
+        Assess CEFR level from text (without or with audio).
 
         Useful for testing or when transcription is already done.
 
         Args:
             text: Transcription text
-            words: Word timestamps (optional, for fluency)
+            words: Word timestamps (optional, for fluency/phonology)
             duration: Audio duration (optional, for fluency)
+            audio_path: Path to audio file (optional, for phonology)
 
         Returns:
-            AssessmentResult (fluency may be limited without timestamps)
+            AssessmentResult (some assessments limited without full data)
         """
         # Assess range
         range_score = self.range_assessor.assess(text)
@@ -272,19 +373,47 @@ class AssessmentPipeline:
                 feedback=["Fluency requires word timestamps"],
             )
 
-        # Calculate combined score (range only if no fluency)
+        # Assess accuracy (always available with text)
+        accuracy_score = None
+        if self.accuracy_assessor:
+            accuracy_score = self.accuracy_assessor.assess(text)
+
+        # Assess phonology if words provided
+        phonology_score = None
+        if self.phonology_assessor and words:
+            phonology_score = self.phonology_assessor.assess(
+                words=words,
+                audio_path=audio_path,
+            )
+
+        # Calculate combined score
+        active_weight = 0.0
+        combined_score = 0.0
+        combined_confidence = 0.0
+
         if fluency_score.score > 0:
-            combined_score = (
-                fluency_score.score * self.fluency_weight
-                + range_score.score * self.range_weight
-            )
-            combined_confidence = (
-                fluency_score.confidence * self.fluency_weight
-                + range_score.confidence * self.range_weight
-            )
-        else:
-            combined_score = range_score.score
-            combined_confidence = range_score.confidence
+            combined_score += fluency_score.score * self.fluency_weight
+            combined_confidence += fluency_score.confidence * self.fluency_weight
+            active_weight += self.fluency_weight
+
+        combined_score += range_score.score * self.range_weight
+        combined_confidence += range_score.confidence * self.range_weight
+        active_weight += self.range_weight
+
+        if accuracy_score:
+            combined_score += accuracy_score.score * self.accuracy_weight
+            combined_confidence += accuracy_score.confidence * self.accuracy_weight
+            active_weight += self.accuracy_weight
+
+        if phonology_score:
+            combined_score += phonology_score.score * self.phonology_weight
+            combined_confidence += phonology_score.confidence * self.phonology_weight
+            active_weight += self.phonology_weight
+
+        # Normalize by active weight
+        if active_weight > 0:
+            combined_score /= active_weight
+            combined_confidence /= active_weight
 
         level = self._score_to_level(combined_score)
 
@@ -294,8 +423,12 @@ class AssessmentPipeline:
             confidence=combined_confidence,
             fluency=fluency_score,
             range=range_score,
+            accuracy=accuracy_score,
+            phonology=phonology_score,
             fluency_weight=self.fluency_weight if fluency_score.score > 0 else 0.0,
-            range_weight=self.range_weight if fluency_score.score > 0 else 1.0,
+            range_weight=self.range_weight,
+            accuracy_weight=self.accuracy_weight if accuracy_score else 0.0,
+            phonology_weight=self.phonology_weight if phonology_score else 0.0,
         )
 
     def _score_to_level(self, score: float) -> str:

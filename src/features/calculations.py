@@ -909,6 +909,210 @@ def analyze_lexical_diversity(text: str) -> Dict:
 
 
 # =============================================================================
+# ACCURACY CALCULATIONS
+# =============================================================================
+
+
+def calculate_error_density(
+    error_count: int,
+    word_count: int,
+    per: int = 100,
+) -> float:
+    """
+    Calculate error density (errors per N words).
+
+    Formula: density = (error_count / word_count) * per
+
+    CEFR Benchmarks (errors per 100 words):
+    - A1: > 10 errors
+    - A2: 5-10 errors
+    - B1: 2-5 errors
+    - B2+: < 2 errors
+
+    Args:
+        error_count: Number of errors
+        word_count: Total word count
+        per: Normalization factor (default: 100)
+
+    Returns:
+        Errors per N words
+
+    Example:
+        >>> calculate_error_density(5, 200)
+        2.5
+    """
+    if word_count <= 0:
+        return 0.0
+    return (error_count / word_count) * per
+
+
+def calculate_grammar_score(error_density: float) -> float:
+    """
+    Convert error density to a 0-100 score.
+
+    Lower error density = higher score.
+
+    Args:
+        error_density: Errors per 100 words
+
+    Returns:
+        Score from 0-100
+    """
+    if error_density <= 1:
+        return 90 + (1 - error_density) * 10
+    elif error_density <= 3:
+        return 70 + (3 - error_density) / 2 * 20
+    elif error_density <= 6:
+        return 50 + (6 - error_density) / 3 * 20
+    elif error_density <= 10:
+        return 30 + (10 - error_density) / 4 * 20
+    else:
+        return max(0, 30 - (error_density - 10) * 2)
+
+
+# =============================================================================
+# PHONOLOGY CALCULATIONS
+# =============================================================================
+
+
+def calculate_mean_confidence(confidences: List[float]) -> float:
+    """
+    Calculate mean confidence score from word confidences.
+
+    Args:
+        confidences: List of confidence values (0-1)
+
+    Returns:
+        Mean confidence
+
+    Example:
+        >>> calculate_mean_confidence([0.9, 0.8, 0.85])
+        0.85
+    """
+    if not confidences:
+        return 0.0
+    return sum(confidences) / len(confidences)
+
+
+def calculate_confidence_std(confidences: List[float]) -> float:
+    """
+    Calculate standard deviation of confidence scores.
+
+    Lower std = more consistent pronunciation.
+
+    Args:
+        confidences: List of confidence values
+
+    Returns:
+        Standard deviation
+    """
+    if len(confidences) < 2:
+        return 0.0
+
+    mean = sum(confidences) / len(confidences)
+    variance = sum((c - mean) ** 2 for c in confidences) / len(confidences)
+    return math.sqrt(variance)
+
+
+def calculate_low_confidence_ratio(
+    confidences: List[float],
+    threshold: float = 0.7,
+) -> float:
+    """
+    Calculate ratio of words with low confidence.
+
+    Args:
+        confidences: List of confidence values
+        threshold: Confidence below this = low (default: 0.7)
+
+    Returns:
+        Ratio of low-confidence words (0-1)
+    """
+    if not confidences:
+        return 0.0
+    low_count = sum(1 for c in confidences if c < threshold)
+    return low_count / len(confidences)
+
+
+def calculate_pitch_variation(
+    pitch_values: List[float],
+) -> Dict[str, float]:
+    """
+    Calculate pitch variation metrics.
+
+    Natural speech has moderate variation (0.15-0.35 relative).
+    Monotone speech has low variation (< 0.10).
+
+    Args:
+        pitch_values: List of pitch (F0) values in Hz
+
+    Returns:
+        Dict with mean, std, range, and variation_ratio
+    """
+    if not pitch_values:
+        return {
+            "mean": 0.0,
+            "std": 0.0,
+            "range": 0.0,
+            "variation_ratio": 0.0,
+        }
+
+    # Filter out zeros/nans
+    valid = [p for p in pitch_values if p > 0]
+    if not valid:
+        return {
+            "mean": 0.0,
+            "std": 0.0,
+            "range": 0.0,
+            "variation_ratio": 0.0,
+        }
+
+    mean_pitch = sum(valid) / len(valid)
+    variance = sum((p - mean_pitch) ** 2 for p in valid) / len(valid)
+    std_pitch = math.sqrt(variance)
+    range_pitch = max(valid) - min(valid)
+
+    return {
+        "mean": mean_pitch,
+        "std": std_pitch,
+        "range": range_pitch,
+        "variation_ratio": std_pitch / mean_pitch if mean_pitch > 0 else 0.0,
+    }
+
+
+def confidence_to_score(mean_confidence: float) -> float:
+    """
+    Convert mean confidence to a 0-100 score.
+
+    Higher confidence = clearer pronunciation = higher score.
+
+    CEFR Benchmarks:
+    - A1: < 0.65 confidence
+    - A2: 0.65-0.75 confidence
+    - B1: 0.75-0.85 confidence
+    - B2+: > 0.85 confidence
+
+    Args:
+        mean_confidence: Average word confidence (0-1)
+
+    Returns:
+        Score from 0-100
+    """
+    if mean_confidence >= 0.90:
+        return 95
+    elif mean_confidence >= 0.85:
+        return 85 + (mean_confidence - 0.85) * 200
+    elif mean_confidence >= 0.75:
+        return 70 + (mean_confidence - 0.75) * 150
+    elif mean_confidence >= 0.65:
+        return 50 + (mean_confidence - 0.65) * 200
+    elif mean_confidence >= 0.50:
+        return 30 + (mean_confidence - 0.50) * 133
+    else:
+        return max(0, mean_confidence * 60)
+
+
+# =============================================================================
 # MODULE INFO
 # =============================================================================
 
@@ -949,4 +1153,13 @@ __all__ = [
     # Convenience
     "analyze_speech_rate",
     "analyze_lexical_diversity",
+    # Accuracy Calculations
+    "calculate_error_density",
+    "calculate_grammar_score",
+    # Phonology Calculations
+    "calculate_mean_confidence",
+    "calculate_confidence_std",
+    "calculate_low_confidence_ratio",
+    "calculate_pitch_variation",
+    "confidence_to_score",
 ]

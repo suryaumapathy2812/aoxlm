@@ -67,14 +67,24 @@ def main():
     parser.add_argument(
         "--fluency-weight",
         type=float,
-        default=0.6,
-        help="Weight for fluency in overall score (default: 0.6)",
+        default=0.35,
+        help="Weight for fluency in overall score (default: 0.35)",
     )
     parser.add_argument(
         "--range-weight",
         type=float,
-        default=0.4,
-        help="Weight for range in overall score (default: 0.4)",
+        default=0.25,
+        help="Weight for range in overall score (default: 0.25)",
+    )
+    parser.add_argument(
+        "--no-accuracy",
+        action="store_true",
+        help="Disable accuracy (grammar) assessment",
+    )
+    parser.add_argument(
+        "--no-phonology",
+        action="store_true",
+        help="Disable phonology (pronunciation) assessment",
     )
 
     args = parser.parse_args()
@@ -110,6 +120,8 @@ def main():
         device=args.device,
         fluency_weight=args.fluency_weight,
         range_weight=args.range_weight,
+        enable_accuracy=not args.no_accuracy,
+        enable_phonology=not args.no_phonology,
     )
 
     print("Transcribing and assessing...")
