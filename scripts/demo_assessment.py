@@ -47,6 +47,7 @@ def transcribe_faster_whisper(
     compute_type: str = "float16",
     language: str = "en",
     initial_prompt: Optional[str] = None,
+    condition_on_previous_text: bool = False,
 ) -> Dict[str, Any]:
     """
     Transcribe audio using faster-whisper with word timestamps.
@@ -58,6 +59,7 @@ def transcribe_faster_whisper(
         compute_type: Compute type (float16, int8, int8_float16)
         language: Language code
         initial_prompt: Optional prompt to guide transcription
+        condition_on_previous_text: If False, prevents hallucination/repetition loops
 
     Returns:
         Dict with 'text' and 'segments' (Whisper-compatible format)
@@ -70,6 +72,24 @@ def transcribe_faster_whisper(
 
     print(
         f"Loading faster-whisper model: {model_size} (device: {device}, compute: {compute_type})..."
+    )
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+
+    print("Transcribing...")
+    segments, info = model.transcribe(
+        audio_path,
+        language=language,
+        word_timestamps=True,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=condition_on_previous_text,  # Prevents repetition loops
+        vad_filter=True,  # Filter out silence
+        vad_parameters=dict(
+            min_silence_duration_ms=300,
+            speech_pad_ms=200,
+        ),
+        no_speech_threshold=0.5,
+        log_prob_threshold=-0.5,
+        compression_ratio_threshold=2.0,  # Lower = stricter filtering of repetitive text
     )
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
@@ -245,8 +265,8 @@ def main():
     )
     parser.add_argument(
         "--prompt",
-        default="Indian English speaker discussing hobbies, interests, travel, making Ganesha idols, cooking, sports.",
-        help="Initial prompt to guide transcription (helps with domain-specific words)",
+        default=None,
+        help="Initial prompt to guide transcription (helps with domain-specific words). Example: 'Ganesha idol, travelling'",
     )
     parser.add_argument(
         "--output-json",
@@ -256,6 +276,12 @@ def main():
         "--fluency-only",
         action="store_true",
         help="Only run fluency assessment",
+    )
+    parser.add_argument(
+        "--no-condition",
+        action="store_true",
+        default=True,
+        help="Disable conditioning on previous text (prevents repetition loops, default: True)",
     )
 
     args = parser.parse_args()
@@ -291,6 +317,7 @@ def main():
         device=args.device,
         compute_type=args.compute_type,
         initial_prompt=args.prompt,
+        condition_on_previous_text=not args.no_condition,
     )
 
     duration = whisper_result.get("duration", 60.0)
