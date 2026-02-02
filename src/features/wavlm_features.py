@@ -136,6 +136,7 @@ class WavLMFeatureExtractor:
         audio_array: Optional[np.ndarray] = None,
         return_embeddings: bool = False,
         chunk_duration: float = 30.0,  # Process in 30-second chunks
+        verbose: bool = False,
     ) -> Tuple[WavLMFeatures, Optional[np.ndarray]]:
         """
         Extract WavLM features from audio.
@@ -145,6 +146,7 @@ class WavLMFeatureExtractor:
             audio_array: Pre-loaded audio array (16kHz)
             return_embeddings: Whether to return raw embeddings
             chunk_duration: Duration of each chunk in seconds (for long audio)
+            verbose: Whether to print progress information
 
         Returns:
             Tuple of (WavLMFeatures, optional embeddings)
@@ -158,6 +160,8 @@ class WavLMFeatureExtractor:
             audio_array, _ = librosa.load(audio_path, sr=self.sample_rate)
 
         duration = len(audio_array) / self.sample_rate
+        if verbose:
+            print(f"Audio: {duration:.1f}s ({len(audio_array)} samples)")
 
         # Process in chunks for long audio (> chunk_duration)
         chunk_samples = int(chunk_duration * self.sample_rate)
@@ -166,12 +170,19 @@ class WavLMFeatureExtractor:
             embeddings_list = []
             num_chunks = (len(audio_array) + chunk_samples - 1) // chunk_samples
 
+            if verbose:
+                print(f"Processing in {num_chunks} chunks of {chunk_duration}s...")
+
             for i in range(num_chunks):
                 start = i * chunk_samples
                 end = min((i + 1) * chunk_samples, len(audio_array))
                 chunk = audio_array[start:end]
 
                 audio_tensor = torch.from_numpy(chunk).float()
+
+                if verbose:
+                    chunk_dur = len(chunk) / self.sample_rate
+                    print(f"  Chunk {i + 1}/{num_chunks}: {chunk_dur:.1f}s", end="\r")
 
                 with torch.no_grad():
                     chunk_emb = self.encoder(
@@ -184,9 +195,15 @@ class WavLMFeatureExtractor:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
+            if verbose:
+                print()  # New line after progress
+
             # Concatenate all chunks
             embeddings = torch.cat(embeddings_list, dim=0)
             embeddings_np = embeddings.numpy()
+
+            if verbose:
+                print(f"Total frames: {embeddings_np.shape[0]}")
         else:
             # Short audio - process at once
             audio_tensor = torch.from_numpy(audio_array).float()
@@ -470,6 +487,7 @@ class WavLMPronunciationAssessor:
         self,
         audio_path: Optional[str] = None,
         audio_array: Optional[np.ndarray] = None,
+        verbose: bool = False,
     ) -> WavLMPronunciationScore:
         """
         Assess pronunciation from audio.
@@ -477,6 +495,7 @@ class WavLMPronunciationAssessor:
         Args:
             audio_path: Path to audio file
             audio_array: Pre-loaded audio array
+            verbose: Whether to print progress information
 
         Returns:
             WavLMPronunciationScore
@@ -484,6 +503,7 @@ class WavLMPronunciationAssessor:
         features, _ = self.extractor.extract(
             audio_path=audio_path,
             audio_array=audio_array,
+            verbose=verbose,
         )
         return self.scorer.score(features)
 

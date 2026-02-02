@@ -35,6 +35,7 @@ def run_comparison(
     audio_path: str,
     models: List[str],
     device: Optional[str] = None,
+    verbose: bool = False,
 ):
     """Run pronunciation assessment with multiple encoders."""
     from src.features.wavlm_features import (
@@ -70,7 +71,7 @@ def run_comparison(
             )
 
             # Extract features
-            features, _ = extractor.extract(audio_array=audio_array)
+            features, _ = extractor.extract(audio_array=audio_array, verbose=verbose)
 
             # Score
             result = scorer.score(features)
@@ -142,6 +143,12 @@ def main():
         default=["wavlm-large", "wavlm-base", "mms-300m", "xls-r-300m"],
         help=f"Models to compare. Available: {AVAILABLE_MODELS}",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Show detailed progress (chunking, frame counts)",
+    )
 
     args = parser.parse_args()
 
@@ -156,6 +163,7 @@ def main():
         audio_path=args.audio_path,
         models=args.models,
         device=args.device,
+        verbose=args.verbose,
     )
 
 
