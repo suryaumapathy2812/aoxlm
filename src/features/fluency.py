@@ -504,56 +504,71 @@ class FluencyScorer:
         sub_scores: Dict[str, float],
         level: str,
     ) -> List[str]:
-        """Generate actionable feedback based on scores."""
+        """Generate actionable feedback based on scores.
+
+        Note: Feedback should be either positive OR negative for each aspect,
+        not both. We use sub_scores as the primary indicator to avoid contradictions.
+        """
         feedback = []
 
-        # Speech rate feedback
-        if features.wpm < 80:
-            feedback.append(
-                f"Speech rate is slow ({features.wpm:.0f} WPM). "
-                "Try to speak more continuously without long pauses."
-            )
-        elif features.wpm > 180:
-            feedback.append(
-                f"Speech rate is very fast ({features.wpm:.0f} WPM). "
-                "Consider slowing down for clarity."
-            )
-
-        # Pause feedback
-        if features.pause_ratio > 0.25:
-            feedback.append(
-                f"High pause ratio ({features.pause_ratio:.0%}). "
-                "Practice speaking in longer phrases without stopping."
-            )
-
-        if features.num_long_pauses > 3 and features.duration >= 30:
-            feedback.append(
-                f"Several long pauses detected ({features.num_long_pauses}). "
-                "Try to reduce hesitation by preparing your thoughts."
-            )
-
-        # Filler feedback
-        if features.filler_rate > 5:
-            feedback.append(
-                f"Frequent filler words ({features.filler_rate:.1f}/min). "
-                "Practice pausing silently instead of using 'um' or 'uh'."
-            )
-
-        # Repetition feedback
-        if features.repetition_count > 2:
-            feedback.append(
-                f"Word repetitions detected ({features.repetition_count}). "
-                "Take a breath and think before speaking."
-            )
-
-        # Positive feedback
-        if sub_scores["speech_rate"] >= 70:
+        # SPEECH RATE feedback (use sub_score to avoid contradictions)
+        speech_rate_score = sub_scores.get("speech_rate", 50)
+        if speech_rate_score < 50:
+            if features.wpm < 80:
+                feedback.append(
+                    f"Speech rate is slow ({features.wpm:.0f} WPM). "
+                    "Try to speak more continuously without long pauses."
+                )
+            elif features.wpm > 180:
+                feedback.append(
+                    f"Speech rate is very fast ({features.wpm:.0f} WPM). "
+                    "Consider slowing down for clarity."
+                )
+            else:
+                feedback.append(
+                    "Speech rate could be improved for more natural delivery."
+                )
+        elif speech_rate_score >= 70:
             feedback.append("Good speech rate - natural pace.")
 
-        if sub_scores["pauses"] >= 70:
+        # PAUSE feedback (use sub_score to avoid contradictions)
+        pause_score = sub_scores.get("pauses", 50)
+        if pause_score < 50:
+            if features.pause_ratio > 0.25:
+                feedback.append(
+                    f"High pause ratio ({features.pause_ratio:.0%}). "
+                    "Practice speaking in longer phrases without stopping."
+                )
+            elif features.num_long_pauses > 3 and features.duration >= 30:
+                feedback.append(
+                    f"Several long pauses detected ({features.num_long_pauses}). "
+                    "Try to reduce hesitation by preparing your thoughts."
+                )
+            else:
+                feedback.append(
+                    "Pause patterns could be improved for smoother delivery."
+                )
+        elif pause_score >= 70:
             feedback.append("Good pause patterns - speech flows well.")
 
-        if sub_scores["hesitations"] >= 80:
+        # HESITATION feedback (use sub_score to avoid contradictions)
+        hesitation_score = sub_scores.get("hesitations", 50)
+        if hesitation_score < 50:
+            if features.filler_rate > 5:
+                feedback.append(
+                    f"Frequent filler words ({features.filler_rate:.1f}/min). "
+                    "Practice pausing silently instead of using 'um' or 'uh'."
+                )
+            elif features.repetition_count > 2:
+                feedback.append(
+                    f"Word repetitions detected ({features.repetition_count}). "
+                    "Take a breath and think before speaking."
+                )
+            else:
+                feedback.append(
+                    "Some hesitation markers detected. Practice for smoother delivery."
+                )
+        elif hesitation_score >= 80:
             feedback.append("Minimal hesitations - confident delivery.")
 
         return feedback
