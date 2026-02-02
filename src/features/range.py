@@ -2178,44 +2178,43 @@ class RangeScorer:
         sub_scores: Dict[str, float],
         level: str,
     ) -> List[str]:
-        """Generate actionable feedback based on scores."""
+        """Generate actionable feedback based on scores.
+
+        Note: Feedback should be either positive OR negative for each aspect,
+        not both. We use sub_scores as the primary indicator.
+        """
         feedback = []
 
-        # Diversity feedback
-        if features.type_token_ratio < 0.40:
+        # DIVERSITY feedback (use sub_score to avoid contradictions)
+        diversity_score = sub_scores.get("diversity", 50)
+        if diversity_score < 50:
             feedback.append(
                 "Limited vocabulary variety. Try using synonyms and "
                 "avoiding word repetition."
             )
+        elif diversity_score >= 70:
+            feedback.append("Good vocabulary variety - using diverse words.")
 
-        # Sophistication feedback
-        if features.academic_word_ratio < 0.02 and level in ["B1", "B2+"]:
+        # SOPHISTICATION feedback (use sub_score to avoid contradictions)
+        sophistication_score = sub_scores.get("sophistication", 50)
+        if sophistication_score < 50:
             feedback.append(
                 "Consider using more academic/formal vocabulary "
                 "appropriate for your level."
             )
+        elif sophistication_score >= 70:
+            feedback.append("Good use of advanced vocabulary.")
 
-        if features.common_word_ratio > 0.85:
-            feedback.append(
-                "Vocabulary is mostly basic words. Try incorporating "
-                "more advanced vocabulary."
-            )
-
-        # Breadth feedback
-        if features.avg_word_length < 4.0:
+        # BREADTH feedback
+        breadth_score = sub_scores.get("breadth", 50)
+        if breadth_score < 50:
             feedback.append(
                 "Using mostly short, simple words. Practice using "
                 "longer, more precise vocabulary."
             )
 
-        # Positive feedback
-        if sub_scores["diversity"] >= 70:
-            feedback.append("Good vocabulary variety - using diverse words.")
-
-        if sub_scores["sophistication"] >= 70:
-            feedback.append("Good use of advanced vocabulary.")
-
-        if features.academic_word_count >= 5:
+        # Additional positive feedback (only if not contradicting above)
+        if features.academic_word_count >= 5 and sophistication_score >= 50:
             feedback.append(
                 f"Using academic vocabulary well ({features.academic_word_count} academic words)."
             )
