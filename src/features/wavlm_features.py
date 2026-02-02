@@ -128,7 +128,7 @@ class WavLMFeatureExtractor:
             device=self.device,
         )
         self._loaded = True
-        print(f"WavLM loaded on {self.device}")
+        print(f"WavLM loaded on {self.device}", flush=True)
 
     def extract(
         self,
@@ -150,24 +150,30 @@ class WavLMFeatureExtractor:
         self._load_model()
 
         # Load audio
+        print(f"Loading audio from {audio_path}...", flush=True)
         if audio_array is None:
             import librosa
 
             audio_array, _ = librosa.load(audio_path, sr=self.sample_rate)
 
         duration = len(audio_array) / self.sample_rate
+        print(f"Audio loaded: {len(audio_array)} samples, {duration:.1f}s", flush=True)
 
         # Convert to tensor
         audio_tensor = torch.from_numpy(audio_array).float()
+        print(f"Tensor shape: {audio_tensor.shape}", flush=True)
 
         # Get embeddings [1, T, D]
+        print("Running WavLM inference...", flush=True)
         with torch.no_grad():
             embeddings = self.encoder(audio_tensor, sampling_rate=self.sample_rate)
+        print(f"Embeddings shape: {embeddings.shape}", flush=True)
 
         embeddings = embeddings.squeeze(0)  # [T, D]
         embeddings_np = embeddings.cpu().numpy()
 
         # Extract features
+        print("Computing features...", flush=True)
         features = self._compute_features(embeddings_np, duration)
 
         if return_embeddings:
