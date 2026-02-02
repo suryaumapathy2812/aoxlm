@@ -51,7 +51,7 @@ class AudioProcessor:
         self,
         target_sample_rate: int = TARGET_SAMPLE_RATE,
         normalize: bool = True,
-        max_duration: Optional[float] = 300.0,  # 5 minutes max
+        max_duration: Optional[float] = 60.0,  # 1 minute max (GPU memory safe)
     ):
         """
         Initialize audio processor.
