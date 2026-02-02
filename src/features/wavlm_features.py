@@ -496,9 +496,11 @@ if __name__ == "__main__":
     print()
 
     try:
+        print("Creating assessor...", flush=True)
         assessor = WavLMPronunciationAssessor(device=device)
-        print("Running assessment...")
+        print("Running assessment...", flush=True)
         result = assessor.assess(audio_path=audio_path)
+        print("Assessment complete!", flush=True)
 
         print()
         print("=" * 60)
